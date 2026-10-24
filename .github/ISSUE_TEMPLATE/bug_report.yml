@@ -1,0 +1,39 @@
+name: Bug report
+description: Something on the terminal isn't behaving the way it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Firmware version, board revision, and a serial
+        log capture go a long way — please attach what you can.
+  - type: input
+    id: version
+    attributes:
+      label: Firmware version
+      description: The build stamp from the boot log, or the release tag you flashed.
+      placeholder: e.g. v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected vs. what the terminal actually did.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Serial log / screenshots
+      description: Boot log or monitor output around the failure, photos of the screen.
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: ESP-IDF version, host OS, how the board is powered.
+      placeholder: e.g. ESP-IDF v6.1, Windows 11, USB-C from PC
+    validations:
+      required: true
