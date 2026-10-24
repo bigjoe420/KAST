@@ -31,15 +31,7 @@ static esp_err_t gt911_raw_read(uint16_t reg, uint8_t *buf, size_t len)
     return i2c_master_transmit_receive(s_gt911_raw, addr, 2, buf, len, 100);
 }
 
-static esp_err_t gt911_raw_write8(uint16_t reg, uint8_t val)
-{
-    uint8_t buf[3] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), val};
-    return i2c_master_transmit(s_gt911_raw, buf, 3, 100);
-}
-
-/* Diagnostics shared with the heartbeat (definitions live here so both
- * kast_touch_init and the debug task can reach them). */
-static uint8_t s_raw_status = 0; /* last raw 0x814E value (bypasses parser) */
+/* Chip-reported resolution, logged at boot for the bench record. */
 static uint16_t s_chip_xres = 0, s_chip_yres = 0;
 
 esp_err_t kast_touch_init(esp_lcd_touch_handle_t *out_touch)
@@ -73,6 +65,12 @@ esp_err_t kast_touch_init(esp_lcd_touch_handle_t *out_touch)
         },
         .flags = {
             .swap_xy = 0,
+            /* Empirical calibration 2026-10-24 (owner corner taps, on-screen
+             * readout): raw GT911 coordinates are ALREADY in LVGL space on
+             * this glass — top-left tap reads ~24,74 and bottom-right ~456,
+             * 406. The vendor library's double inversion (TOUCH_MAP 480->0)
+             * does NOT apply at rotation 0. Any mirroring makes presses land
+             * diagonally opposite. */
             .mirror_x = 0,
             .mirror_y = 0,
         },
@@ -133,78 +131,4 @@ esp_err_t kast_touch_init(esp_lcd_touch_handle_t *out_touch)
                  regdump[28], regdump[29], regdump[30], regdump[31]);
     }
     return ESP_OK;
-}
-
-/* Last few touch-downs, retained for the heartbeat replay — lets a serial
- * capture made any time after a tap sequence still report the coordinates. */
-#define KAST_TAP_HISTORY 6
-static uint16_t s_tap_x[KAST_TAP_HISTORY], s_tap_y[KAST_TAP_HISTORY];
-static uint8_t s_tap_count = 0;
-static uint32_t s_polls = 0;    /* read_data calls — proves the task is alive */
-static uint32_t s_hits = 0;     /* polls that reported a touch */
-static esp_err_t s_last_err = ESP_OK;
-
-uint8_t kast_touch_last_taps(const uint16_t **x, const uint16_t **y)
-{
-    *x = s_tap_x;
-    *y = s_tap_y;
-    return s_tap_count;
-}
-
-void kast_touch_stats(uint32_t *polls, uint32_t *hits, int *last_err)
-{
-    *polls = s_polls;
-    *hits = s_hits;
-    *last_err = (int)s_last_err;
-}
-
-void kast_touch_raw_diag(uint8_t *status, uint16_t *xres, uint16_t *yres)
-{
-    *status = s_raw_status;
-    *xres = s_chip_xres;
-    *yres = s_chip_yres;
-}
-
-static void touch_debug_task(void *arg)
-{
-    (void)arg;
-    bool was_touched = false;
-
-    while (1) {
-        s_polls++;
-        /* Raw path: status @ 0x814E, point data @ 0x814F, clear @ 0x814E */
-        uint8_t st = 0;
-        s_last_err = gt911_raw_read(0x814E, &st, 1);
-        s_raw_status = (s_last_err == ESP_OK) ? st : 0xEE;
-        if (st != 0 && s_last_err == ESP_OK) {
-            ESP_LOGI(TAG, "touch status 0x%02X", st);
-        }
-        bool touched = ((s_last_err == ESP_OK) && (st & 0x80) &&
-                        (st & 0x0F) > 0 && (st & 0x0F) <= 5);
-        if (touched) {
-            s_hits++;
-            uint8_t pt[8] = {0};
-            if (gt911_raw_read(0x814F, pt, 8) == ESP_OK) {
-                uint16_t x = (uint16_t)(pt[1] | (pt[2] << 8));
-                uint16_t y = (uint16_t)(pt[3] | (pt[4] << 8));
-                if (!was_touched && s_tap_count < KAST_TAP_HISTORY) {
-                    s_tap_x[s_tap_count] = x;
-                    s_tap_y[s_tap_count] = y;
-                    s_tap_count++;
-                    ESP_LOGI(TAG, "touch raw: x=%d y=%d", x, y);
-                }
-            }
-        }
-        was_touched = touched;
-        gt911_raw_write8(0x814E, 0);
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-}
-
-esp_err_t kast_touch_debug_start(esp_lcd_touch_handle_t touch)
-{
-    (void)touch; /* raw path uses s_gt911_raw directly */
-    BaseType_t ok = xTaskCreate(touch_debug_task, "touch_dbg", 4096,
-                                NULL, 5, NULL);
-    return (ok == pdPASS) ? ESP_OK : ESP_FAIL;
 }

@@ -19,9 +19,6 @@ esp_err_t kast_display_init(esp_lcd_panel_handle_t *out_panel);
 esp_err_t kast_backlight_init(void);
 void kast_backlight_set(uint8_t percent);
 
-/* Draw the Phase-1 color-bar proof into framebuffer 0. */
-void kast_display_test_pattern(esp_lcd_panel_handle_t panel);
-
 #ifdef __cplusplus
 }
 #endif

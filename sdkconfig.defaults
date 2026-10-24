@@ -22,3 +22,12 @@ CONFIG_ESP_CONSOLE_UART_NUM_0=y
 
 # --- Build hygiene ---
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# --- LVGL (via esp_lvgl_port) ---
+# LV_CONF_SKIP: Kconfig-driven config, no lv_conf.h file to maintain.
+CONFIG_LV_CONF_SKIP=y
+CONFIG_LV_COLOR_DEPTH_16=y
+# Home screen typography (480x480 needs large fonts to breathe)
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
