@@ -10,6 +10,7 @@
 #include "esp_chip_info.h"
 #include "esp_psram.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
 #include "esp_lcd_types.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch.h"
@@ -17,6 +18,7 @@
 #include "display.h"
 #include "touch.h"
 #include "ui.h"
+#include "net.h"
 
 static const char *TAG = "kast";
 
@@ -49,6 +51,14 @@ void app_main(void)
 
     /* UI: LVGL bounce-buffer mode on the RGB panel, then Home screen. */
     ESP_ERROR_CHECK(kast_ui_init(panel, touch));
+
+    /* Wi-Fi station: soft-fail when wifi_config.h has no creds yet —
+     * the UI stays up and the status bar shows the state. */
+    ESP_ERROR_CHECK(nvs_flash_init());
+    const esp_err_t net_err = kast_net_init();
+    if (net_err != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi init skipped: %s", esp_err_to_name(net_err));
+    }
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));

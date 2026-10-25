@@ -10,7 +10,7 @@
  *                area, ~20 Hz timer, sine-blended heights)
  *   [footer]     status line + live touch coordinates (axis-mapping proof)
  *
- * Theme (D-14): Kick green on near-black. All motion is small-area; nothing
+ * Theme: Kick green on near-black. All motion is small-area; nothing
  * here redraws the full frame outside LVGL's own dirty tracking.
  */
 #include <math.h>
@@ -39,6 +39,7 @@ static const char *TAG = "ui";
 
 static lv_display_t *s_disp;
 static lv_obj_t *s_status_label;   /* footer status line */
+static lv_obj_t *s_net_label;      /* status-bar Wi-Fi/OBS state */
 static lv_obj_t *s_eq_bars[KAST_EQ_BARS];
 /* Thin adapter: lv_anim's exec_cb is (void *, int32_t); lv_obj_set_style_opa
  * takes a selector too — bridge them so the compiler doesn't cast. */
@@ -133,10 +134,10 @@ static void build_home_screen(void)
     lv_obj_set_style_text_color(brand, KAST_COLOR_GREEN, 0);
     lv_obj_align(brand, LV_ALIGN_LEFT_MID, 16, 0);
 
-    lv_obj_t *net = lv_label_create(bar);
-    lv_label_set_text(net, "WIFI --  \xC2\xB7  OBS --");
-    lv_obj_set_style_text_color(net, KAST_COLOR_TEXT_DIM, 0);
-    lv_obj_align(net, LV_ALIGN_RIGHT_MID, -16, 0);
+    s_net_label = lv_label_create(bar);
+    lv_label_set_text(s_net_label, "WIFI --  \xC2\xB7  OBS --");
+    lv_obj_set_style_text_color(s_net_label, KAST_COLOR_TEXT_DIM, 0);
+    lv_obj_align(s_net_label, LV_ALIGN_RIGHT_MID, -16, 0);
 
     /* Title block */
     lv_obj_t *title = lv_label_create(scr);
@@ -213,6 +214,26 @@ static void build_home_screen(void)
 /* ------------------------------------------------------------------ */
 /* Public entry                                                        */
 /* ------------------------------------------------------------------ */
+
+/* Called from the Wi-Fi event handler (its own task) — must take the
+ * LVGL lock before touching widgets. connected flips the label to Kick
+ * green; text overrides the Wi-Fi word while disconnected (WIFI ... /
+ * WIFI RETRY / WIFI FAIL). NULL restores the neutral placeholder. */
+void kast_ui_net_status(bool connected, const char *text)
+{
+    const char *wifi_text = connected ? "WIFI OK"
+                          : (text ? text : "WIFI --");
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%s  \xC2\xB7  OBS --", wifi_text);
+
+    if (!lvgl_port_lock(0)) {
+        return;
+    }
+    lv_label_set_text(s_net_label, buf);
+    lv_obj_set_style_text_color(s_net_label,
+                                connected ? KAST_COLOR_GREEN : KAST_COLOR_TEXT_DIM, 0);
+    lvgl_port_unlock();
+}
 
 esp_err_t kast_ui_init(esp_lcd_panel_handle_t panel, esp_lcd_touch_handle_t touch)
 {

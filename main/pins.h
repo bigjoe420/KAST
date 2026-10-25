@@ -13,7 +13,7 @@
 #define KAST_LCD_R1        12
 #define KAST_LCD_R2        13
 #define KAST_LCD_R3        14
-#define KAST_LCD_R4        0   /* BOOT strapping pin — gotcha K-1 */
+#define KAST_LCD_R4        0   /* BOOT strapping pin */
 #define KAST_LCD_G0        8
 #define KAST_LCD_G1        20  /* native USB D+ (consumed) */
 #define KAST_LCD_G2        3   /* JTAG/strapping */
@@ -49,7 +49,7 @@
 
 /* ---- GT911 touch (I2C, addr 0x5D, no INT/RST) ---- */
 #define KAST_TOUCH_SDA     19  /* native USB D- (consumed) */
-#define KAST_TOUCH_SCL     45  /* strapping pin — gotcha K-1 */
+#define KAST_TOUCH_SCL     45  /* strapping pin */
 #define KAST_TOUCH_ADDR    0x5D
 
 /* ---- SD card (SDSPI) ---- */

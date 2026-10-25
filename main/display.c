@@ -19,7 +19,7 @@
  * vendor init stream is sent over the 3-wire SPI command channel instead —
  * same bytes the component would send.
  *
- * Gotchas baked in here (see PROGRESS.md for the war stories):
+ * Gotchas baked in here (learned the hard way on the bench):
  *  - 3-wire SPI runs in MODE 0 (Espressif ST7701 example): the SCL active
  *    edge selects the sampling edge; mode 3 garbles every init command.
  *  - SWRESET (0x01) before the init stream — without it the ST7701 can be

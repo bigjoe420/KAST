@@ -23,6 +23,12 @@ CONFIG_ESP_CONSOLE_UART_NUM_0=y
 # --- Build hygiene ---
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
+# --- Partition table ---
+# Wi-Fi + LVGL already exceed the 1 MB single-app slot (binary ~1.28 MB);
+# the large variant gives 0x1E0000 app + 0x20000 NVS + 0x110000 SPIFFS.
+# Revisit for OTA (two-slot) when updates ship over the air.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
 # --- LVGL (via esp_lvgl_port) ---
 # LV_CONF_SKIP: Kconfig-driven config, no lv_conf.h file to maintain.
 CONFIG_LV_CONF_SKIP=y
