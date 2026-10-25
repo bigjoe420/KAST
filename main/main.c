@@ -19,6 +19,7 @@
 #include "touch.h"
 #include "ui.h"
 #include "net.h"
+#include "sd.h"
 
 static const char *TAG = "kast";
 
@@ -58,6 +59,12 @@ void app_main(void)
     const esp_err_t net_err = kast_net_init();
     if (net_err != ESP_OK) {
         ESP_LOGW(TAG, "Wi-Fi init skipped: %s", esp_err_to_name(net_err));
+    }
+
+    /* SD card (SDSPI + FATFS): soft-fail — a missing card never blocks boot. */
+    const esp_err_t sd_err = kast_sd_init();
+    if (sd_err != ESP_OK) {
+        ESP_LOGW(TAG, "SD card mount skipped: %s", esp_err_to_name(sd_err));
     }
 
     while (1) {
