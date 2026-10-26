@@ -1,13 +1,13 @@
 /*
  * net.c — KAST Wi-Fi station bring-up.
  *
- * Creds come from wifi_config.h — a LOCAL, GITIGNORED header that never
- * enters version control. The product path is on-device entry into NVS;
- * this header is the bench bridge so bring-up never hardcodes secrets in
- * committed source.
+ * Creds: NVS first (entered on-device via the settings screen, D-4),
+ * falling back to wifi_config.h — a LOCAL, GITIGNORED bench header that
+ * never enters version control. With no NVS entry and an empty header
+ * the station soft-fails and the UI keeps running.
  *
  * Policy: reconnect forever with backoff, log every transition, and push
- * status to the UI status bar.
+ * status to the status-bar Wi-Fi link word.
  */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -21,6 +21,7 @@
 
 #include "net.h"
 #include "ui.h"
+#include "config.h"
 #include "wifi_config.h"
 
 static const char *TAG = "net";
@@ -28,13 +29,24 @@ static const char *TAG = "net";
 static uint8_t s_retry = 0;
 #define KAST_NET_MAX_RETRY 10
 
+/* Static buffers — the creds path never allocates (K-6). Sized to the
+ * driver struct fields (wifi_config_t sta ssid[32] / password[64]). */
+static char s_ssid[32];
+static char s_pass[64];
+
+static void kast_net_set_creds(const char *ssid, const char *pass)
+{
+    snprintf(s_ssid, sizeof(s_ssid), "%s", ssid);
+    snprintf(s_pass, sizeof(s_pass), "%s", pass);
+}
+
 static void kast_net_handler(void *arg, esp_event_base_t base,
                              int32_t id, void *data)
 {
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "sta started, connecting to '%s'", KAST_WIFI_SSID);
-        kast_ui_net_status(false, "WIFI ...");
+        ESP_LOGI(TAG, "sta started, connecting to '%s'", s_ssid);
+        kast_ui_link_status(KAST_LINK_WIFI, false, "...");
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *disc =
@@ -42,13 +54,13 @@ static void kast_net_handler(void *arg, esp_event_base_t base,
         s_retry++;
         if (s_retry > KAST_NET_MAX_RETRY) {
             ESP_LOGE(TAG, "give up after %d retries — rebooting to retry clean", KAST_NET_MAX_RETRY);
-            kast_ui_net_status(false, "WIFI FAIL");
+            kast_ui_link_status(KAST_LINK_WIFI, false, "FAIL");
             vTaskDelay(pdMS_TO_TICKS(3000));
             esp_restart();
         }
         ESP_LOGW(TAG, "disconnected (retry %d/%d) reason=%d rssi=%d",
                  s_retry, KAST_NET_MAX_RETRY, disc->reason, disc->rssi);
-        kast_ui_net_status(false, "WIFI RETRY");
+        kast_ui_link_status(KAST_LINK_WIFI, false, "RETRY");
         uint32_t backoff_ms = 1000u * s_retry;
         if (backoff_ms > 15000u) {
             backoff_ms = 15000u;
@@ -59,14 +71,29 @@ static void kast_net_handler(void *arg, esp_event_base_t base,
         const ip_event_got_ip_t *event = (const ip_event_got_ip_t *)data;
         s_retry = 0;
         ESP_LOGI(TAG, "got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        kast_ui_net_status(true, NULL); /* UI shows link state + IP in log */
+        kast_ui_link_status(KAST_LINK_WIFI, true, NULL);
     }
+}
+
+/* Load creds: NVS first (settings screen), bench header as fallback. */
+static esp_err_t kast_net_load_creds(void)
+{
+    if (kast_config_load_wifi(s_ssid, sizeof(s_ssid), s_pass, sizeof(s_pass)) == ESP_OK) {
+        ESP_LOGI(TAG, "Wi-Fi creds from NVS (ssid '%s')", s_ssid);
+        return ESP_OK;
+    }
+    if (strlen(KAST_WIFI_SSID) == 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    kast_net_set_creds(KAST_WIFI_SSID, KAST_WIFI_PASSWORD);
+    ESP_LOGI(TAG, "Wi-Fi creds from bench header (ssid '%s')", s_ssid);
+    return ESP_OK;
 }
 
 esp_err_t kast_net_init(void)
 {
-    ESP_RETURN_ON_FALSE(strlen(KAST_WIFI_SSID) > 0, ESP_ERR_INVALID_STATE,
-                        TAG, "no Wi-Fi creds — fill main/wifi_config.h (local, gitignored)");
+    ESP_RETURN_ON_ERROR(kast_net_load_creds(), TAG,
+                        "no Wi-Fi creds — enter them on the settings screen");
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif init failed");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop failed");
@@ -80,14 +107,30 @@ esp_err_t kast_net_init(void)
                         TAG, "ip event register failed");
 
     wifi_config_t sta_cfg = {0};
-    strncpy((char *)sta_cfg.sta.ssid, KAST_WIFI_SSID, sizeof(sta_cfg.sta.ssid) - 1);
-    strncpy((char *)sta_cfg.sta.password, KAST_WIFI_PASSWORD, sizeof(sta_cfg.sta.password) - 1);
+    snprintf((char *)sta_cfg.sta.ssid, sizeof(sta_cfg.sta.ssid), "%s", s_ssid);
+    snprintf((char *)sta_cfg.sta.password, sizeof(sta_cfg.sta.password), "%s", s_pass);
     sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg), TAG, "set config failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start failed");
 
-    ESP_LOGI(TAG, "Wi-Fi station up (ssid '%s')", KAST_WIFI_SSID);
+    ESP_LOGI(TAG, "Wi-Fi station up (ssid '%s')", s_ssid);
     return ESP_OK;
+}
+
+/* Settings screen save path: new creds go live without a reboot.
+ * Runs in LVGL task context; the Wi-Fi API is task-safe. */
+void kast_net_apply_creds(const char *ssid, const char *pass)
+{
+    kast_net_set_creds(ssid, pass);
+    s_retry = 0;
+    wifi_config_t sta_cfg = {0};
+    snprintf((char *)sta_cfg.sta.ssid, sizeof(sta_cfg.sta.ssid), "%s", s_ssid);
+    snprintf((char *)sta_cfg.sta.password, sizeof(sta_cfg.sta.password), "%s", s_pass);
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+    esp_wifi_disconnect();
+    esp_wifi_connect();
+    ESP_LOGI(TAG, "applied new creds (ssid '%s'), reconnecting", s_ssid);
 }

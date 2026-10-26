@@ -10,6 +10,7 @@
 #include "esp_chip_info.h"
 #include "esp_psram.h"
 #include "esp_log.h"
+#include "esp_app_desc.h"
 #include "nvs_flash.h"
 #include "esp_lcd_types.h"
 #include "esp_lcd_panel_ops.h"
@@ -20,16 +21,53 @@
 #include "ui.h"
 #include "net.h"
 #include "sd.h"
+#include "build_stamp.h"
 
 static const char *TAG = "kast";
 
+/* Power sequencing: a cold boot from battery browns out if the backlight
+ * slams to 100% while the panel, PSRAM, and radio all surge at once (the
+ * rail collapses, brownout detector resets, loop forever). Ramp the
+ * backlight up slowly, then start Wi-Fi/SD only after the surge has
+ * passed. Harmless on USB; mandatory on battery. */
+static void kast_power_up_task(void *arg)
+{
+    (void)arg;
+    for (int p = 10; p <= 100; p += 3) {
+        kast_backlight_set((uint8_t)p);
+        vTaskDelay(pdMS_TO_TICKS(45));
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    const esp_err_t net_err = kast_net_init();
+    if (net_err != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi init skipped: %s", esp_err_to_name(net_err));
+    }
+
+    const esp_err_t sd_err = kast_sd_init();
+    if (sd_err != ESP_OK) {
+        ESP_LOGW(TAG, "SD card mount skipped: %s", esp_err_to_name(sd_err));
+    }
+    vTaskDelete(NULL);
+}
+
 void app_main(void)
 {
+    /* NVS first: config reads (Wi-Fi creds, relay endpoint) happen as
+     * soon as net/UI come up. Cheap and flashless — safe pre-ramp. */
+    ESP_ERROR_CHECK(nvs_flash_init());
+
     esp_chip_info_t chip;
     esp_chip_info(&chip);
 
     ESP_LOGI(TAG, "=== KAST boot proof ===");
-    ESP_LOGI(TAG, "BUILD: %s %s", __DATE__, __TIME__);
+    /* Freshness stamp: build_stamp.c recompiles on every build (CMake
+     * touch step), so this line always reflects the current binary —
+     * the app-descriptor time only refreshes when esp_app_desc.c itself
+     * happens to recompile, which silently staled the check. */
+    const esp_app_desc_t *app = esp_app_get_description();
+    ESP_LOGI(TAG, "BUILD: %s (v%s, idf %s)", kast_build_stamp(),
+             app->version, app->idf_ver);
     ESP_LOGI(TAG, "chip: ESP32-S3 rev %d, %d cores @ %d MHz",
              chip.revision, chip.cores, CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ);
     ESP_LOGI(TAG, "features: WiFi %s, BT %s, embedded-psram %s",
@@ -44,28 +82,17 @@ void app_main(void)
     ESP_ERROR_CHECK(kast_backlight_init());
     esp_lcd_panel_handle_t panel = NULL;
     ESP_ERROR_CHECK(kast_display_init(&panel));
-    kast_backlight_set(100);
 
     /* Touch: GT911 (LVGL reads it through the esp_lcd_touch handle). */
     esp_lcd_touch_handle_t touch = NULL;
     ESP_ERROR_CHECK(kast_touch_init(&touch));
 
-    /* UI: LVGL bounce-buffer mode on the RGB panel, then Home screen. */
+    /* UI: LVGL bounce-buffer mode on the RGB panel, then Home screen.
+     * Backlight starts dim; kast_power_up_task ramps it and brings the
+     * radio/SD up after the cold-start surge has passed. */
     ESP_ERROR_CHECK(kast_ui_init(panel, touch));
-
-    /* Wi-Fi station: soft-fail when wifi_config.h has no creds yet —
-     * the UI stays up and the status bar shows the state. */
-    ESP_ERROR_CHECK(nvs_flash_init());
-    const esp_err_t net_err = kast_net_init();
-    if (net_err != ESP_OK) {
-        ESP_LOGW(TAG, "Wi-Fi init skipped: %s", esp_err_to_name(net_err));
-    }
-
-    /* SD card (SDSPI + FATFS): soft-fail — a missing card never blocks boot. */
-    const esp_err_t sd_err = kast_sd_init();
-    if (sd_err != ESP_OK) {
-        ESP_LOGW(TAG, "SD card mount skipped: %s", esp_err_to_name(sd_err));
-    }
+    kast_backlight_set(10);
+    xTaskCreate(kast_power_up_task, "kast_pwrup", 4096, NULL, 5, NULL);
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
