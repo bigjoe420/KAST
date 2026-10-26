@@ -65,6 +65,25 @@ idf.py -p COM3 flash monitor   # Windows — adjust the port
 > `idf_run.py` wraps the toolchain in a clean PowerShell subprocess and is
 > location-independent.
 
+## PC Relay
+
+The relay is a small local server on the streaming PC. It owns the Kick
+API credentials (kept in `relay/.env`, gitignored — never on the device)
+and feeds the terminal clean JSON over WebSocket. Requires Node.js 18+.
+
+```bash
+cd relay
+npm install
+npm start            # ws://0.0.0.0:8765
+npm run start:sim    # + fake chat lines every 5s for bench bring-up
+npm test             # loopback smoke test
+```
+
+On the device: tap the status bar → settings → set the relay host to this
+PC's LAN IP on the same network as the hotspot, port 8765. The status bar
+shows `RELAY OK` once the link is up; every received frame lands in the
+serial log (`tools/capture.py`).
+
 ## System Architecture
 
 ```
@@ -87,13 +106,31 @@ keyboard input back through the same socket for injection into chat.
 ```
 KAST/
 ├── CMakeLists.txt              # Root project (target esp32s3, binary KAST.bin)
+├── partitions.csv              # Custom table: 3 MB factory app, NVS at 0x9000
 ├── sdkconfig.defaults          # Mandatory Kconfig (target, flash, PSRAM, app version)
 ├── main/
-│   ├── CMakeLists.txt          # Component registration
+│   ├── CMakeLists.txt          # Component registration + build-stamp touch step
 │   ├── main.c                  # Boot proof + subsystem bring-up entry
+│   ├── build_stamp.c/.h        # Per-build freshness stamp (Commandment: fresh boot log)
 │   ├── pins.h                  # Canonical pin macros (board law)
 │   ├── display.c/.h            # ST7701S RGB panel, vendor type1 init, backlight PWM
-│   └── touch.c/.h              # GT911 driver, tap history + serial diagnostics
+│   ├── touch.c/.h              # GT911 bring-up + probe diagnostics
+│   ├── ui.c/.h                 # LVGL port, chrome, screen router, link status words
+│   ├── home_screen.c           # Home showcase: K-helix towers, fire, EQ particles
+│   ├── simple_screens.c        # CHAT / SCENES / SFX placeholder pages
+│   ├── settings_screen.c       # Connection page: Wi-Fi + relay entry -> NVS
+│   ├── net.c/.h                # Wi-Fi station, reconnect backoff, NVS-first creds
+│   ├── relay.c/.h              # PC-relay WebSocket client (auto-reconnect + ping)
+│   ├── sd.c/.h                 # SDSPI + FATFS mount at /sdcard
+│   ├── config.c/.h             # NVS config layer (Wi-Fi creds, relay endpoint)
+│   ├── wifi_config.h           # Bench-only creds fallback (gitignored)
+│   └── idf_component.yml       # Managed deps (lcd, touch, lvgl, websocket)
+├── relay/
+│   ├── server.js               # PC relay: device WS link, chat frames (Kick TBD)
+│   ├── smoke.js                # Loopback smoke test (npm test)
+│   └── package.json            # ws dependency
+├── tools/
+│   └── capture.py              # Bounded serial capture for bench verification
 ├── docs/
 │   └── PINOUT.md               # Full pin map and board gotchas
 └── idf_run.py                  # Git Bash wrapper for idf.py (MSYSTEM workaround)

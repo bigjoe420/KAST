@@ -66,6 +66,12 @@ static void module_btn_cb(lv_event_t *e)
     kast_ui_show(screen);
 }
 
+static void settings_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    kast_ui_show(KAST_SCREEN_SETTINGS);
+}
+
 static lv_obj_t *module_button(lv_obj_t *parent, const char *name, kast_screen_t screen)
 {
     lv_obj_t *btn = lv_button_create(parent);
@@ -452,6 +458,27 @@ void kast_home_load(lv_obj_t *parent)
     lv_label_set_text(s_status_label, "READY");
     lv_obj_set_style_text_color(s_status_label, KAST_COLOR_TEXT_DIM, 0);
     lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_LEFT, 16, -14);
+
+    /* Settings entry on the Home screen itself: the status bar lives at
+     * the panel's top edge where GT911 touch sensitivity is weakest, so
+     * keep a second, well-inside entry point (bottom-right is free:
+     * EQ strip is centered, HOME moved to the status bar) */
+    lv_obj_t *set_btn = lv_button_create(parent);
+    lv_obj_set_size(set_btn, 128, 34);
+    lv_obj_align(set_btn, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
+    lv_obj_set_style_radius(set_btn, 10, 0);
+    lv_obj_set_style_bg_color(set_btn, KAST_COLOR_CARD, 0);
+    lv_obj_set_style_border_color(set_btn, KAST_COLOR_GREEN_DIM, 0);
+    lv_obj_set_style_border_width(set_btn, 2, 0);
+    lv_obj_set_style_bg_color(set_btn, KAST_COLOR_GREEN, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(set_btn, settings_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *set_label = lv_label_create(set_btn);
+    lv_label_set_text(set_label, "SETTINGS");
+    lv_obj_set_style_text_font(set_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(set_label, KAST_COLOR_TEXT, 0);
+    lv_obj_set_style_text_color(set_label, KAST_COLOR_BG, LV_STATE_PRESSED);
+    lv_obj_center(set_label);
 }
 
 void kast_home_unload(void)

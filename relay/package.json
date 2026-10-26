@@ -1,0 +1,19 @@
+{
+  "name": "kast-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KAST PC relay - bridges the ESP32 terminal to Kick chat and OBS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:sim": "node server.js --simulate-chat",
+    "test": "node smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

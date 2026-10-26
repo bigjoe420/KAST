@@ -1,0 +1,7 @@
+# KAST partition table — ESP32-S3-N16R8 (16 MB flash)
+# Factory app gets 3 MB: LVGL + chat UI + OBS/SFX modules grow fast, and
+# the ws/mbedtls stack already pushed the SINGLE_APP_LARGE layout over.
+# NVS stays at 0x9000 so on-device Wi-Fi creds survive reflashes.
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 0x300000,

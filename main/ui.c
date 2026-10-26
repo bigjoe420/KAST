@@ -93,7 +93,10 @@ static int s_current = -1;         /* no screen loaded yet */
 
 static void home_btn_cb(lv_event_t *e)
 {
-    (void)e;
+    /* The button sits inside the status bar, which has its own CLICKED
+     * handler (jump to Settings). Without this the event bubbles up and
+     * the bar handler runs after ours, overriding HOME with Settings. */
+    lv_event_stop_bubbling(e);
     kast_ui_show(KAST_SCREEN_HOME);
 }
 
@@ -114,12 +117,6 @@ void kast_ui_show(kast_screen_t screen)
     lv_obj_clean(s_content);
     s_screens[screen].load(s_content);
     s_current = screen;
-
-    if (screen == KAST_SCREEN_HOME) {
-        lv_obj_set_hidden(s_home_btn, true);
-    } else {
-        lv_obj_set_hidden(s_home_btn, false);
-    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -167,6 +164,26 @@ static void build_chrome(lv_obj_t *scr)
     }
     render_links();
 
+    /* Home button lives in the status bar — always reachable and never
+     * overlapping page content (the old floating bottom-right slot sat
+     * on top of the settings keyboard) */
+    s_home_btn = lv_button_create(bar);
+    lv_obj_set_size(s_home_btn, 40, 32);
+    lv_obj_align(s_home_btn, LV_ALIGN_LEFT_MID, 78, 0);
+    lv_obj_set_style_radius(s_home_btn, 8, 0);
+    lv_obj_set_style_bg_color(s_home_btn, KAST_COLOR_CARD, 0);
+    lv_obj_set_style_border_color(s_home_btn, KAST_COLOR_GREEN_DIM, 0);
+    lv_obj_set_style_border_width(s_home_btn, 2, 0);
+    lv_obj_set_style_bg_color(s_home_btn, KAST_COLOR_GREEN, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(s_home_btn, home_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *home_label = lv_label_create(s_home_btn);
+    lv_label_set_text(home_label, LV_SYMBOL_HOME);
+    lv_obj_set_style_text_font(home_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(home_label, KAST_COLOR_TEXT, 0);
+    lv_obj_set_style_text_color(home_label, KAST_COLOR_BG, LV_STATE_PRESSED);
+    lv_obj_center(home_label);
+
     /* Content container — the router's canvas */
     s_content = lv_obj_create(scr);
     lv_obj_set_size(s_content, KAST_H_RES, KAST_V_RES - 44);
@@ -175,25 +192,6 @@ static void build_chrome(lv_obj_t *scr)
     lv_obj_set_style_border_width(s_content, 0, 0);
     lv_obj_set_style_pad_all(s_content, 0, 0);
     lv_obj_set_scrollable(s_content, false);
-
-    /* Home button — hidden on the Home screen itself */
-    s_home_btn = lv_button_create(scr);
-    lv_obj_set_size(s_home_btn, 84, 32);
-    lv_obj_align(s_home_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -8);
-    lv_obj_set_style_radius(s_home_btn, 10, 0);
-    lv_obj_set_style_bg_color(s_home_btn, KAST_COLOR_CARD, 0);
-    lv_obj_set_style_border_color(s_home_btn, KAST_COLOR_GREEN_DIM, 0);
-    lv_obj_set_style_border_width(s_home_btn, 2, 0);
-    lv_obj_set_style_bg_color(s_home_btn, KAST_COLOR_GREEN, LV_STATE_PRESSED);
-    lv_obj_set_hidden(s_home_btn, true);
-    lv_obj_add_event_cb(s_home_btn, home_btn_cb, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *home_label = lv_label_create(s_home_btn);
-    lv_label_set_text(home_label, "HOME");
-    lv_obj_set_style_text_font(home_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(home_label, KAST_COLOR_TEXT, 0);
-    lv_obj_set_style_text_color(home_label, KAST_COLOR_BG, LV_STATE_PRESSED);
-    lv_obj_center(home_label);
 }
 
 /* ------------------------------------------------------------------ */

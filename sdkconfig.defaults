@@ -24,10 +24,14 @@ CONFIG_ESP_CONSOLE_UART_NUM_0=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
 # --- Partition table ---
-# Wi-Fi + LVGL already exceed the 1 MB single-app slot (binary ~1.28 MB);
-# the large variant gives 0x1E0000 app + 0x20000 NVS + 0x110000 SPIFFS.
+# Custom table (partitions.csv): factory app gets 3 MB at 0x10000 —
+# SINGLE_APP_LARGE (~1.5 MB app) overflowed once the ws/mbedtls stack
+# landed, and chat UI + OBS/SFX modules still need room to grow.
+# NVS stays at 0x9000 so on-device Wi-Fi creds survive reflashes.
 # Revisit for OTA (two-slot) when updates ship over the air.
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
 # --- LVGL (via esp_lvgl_port) ---
 # LV_CONF_SKIP: Kconfig-driven config, no lv_conf.h file to maintain.

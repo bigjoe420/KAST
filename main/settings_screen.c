@@ -21,6 +21,7 @@
 #include "ui.h"
 #include "config.h"
 #include "net.h"
+#include "relay.h"
 #include "wifi_config.h"
 
 static const char *TAG = "settings";
@@ -35,9 +36,25 @@ static lv_obj_t *s_port_ta;
 static lv_obj_t *s_msg_label;
 static lv_obj_t *s_keyboard;
 
+/* Host/port entry layout: digits, dot, backspace — the stock text board
+ * buries the period behind a mode switch and IPs are the common case
+ * here. The "abc" key is the keyboard's built-in mode-change back to
+ * the text board. */
+static const char *const s_kb_host_map[] = {
+    "1", "2", "3", ".", "\n",
+    "4", "5", "6", LV_SYMBOL_BACKSPACE, "\n",
+    "7", "8", "9", "0", "\n",
+    "abc", " ", "\n", NULL,
+};
+
 static void ta_focus_cb(lv_event_t *e)
 {
-    lv_keyboard_set_textarea(s_keyboard, lv_event_get_target(e));
+    lv_obj_t *ta = lv_event_get_target(e);
+    lv_keyboard_set_textarea(s_keyboard, ta);
+    const lv_keyboard_mode_t mode =
+        (ta == s_host_ta || ta == s_port_ta) ? LV_KEYBOARD_MODE_USER_1
+                                             : LV_KEYBOARD_MODE_TEXT_LOWER;
+    lv_keyboard_set_mode(s_keyboard, mode);
 }
 
 static void ta_defocus_cb(lv_event_t *e)
@@ -61,6 +78,16 @@ static lv_obj_t *make_field(lv_obj_t *parent, const char *placeholder,
     lv_obj_set_style_border_color(ta, KAST_COLOR_GREEN_DIM, 0);
     lv_obj_set_style_border_width(ta, 2, 0);
     lv_obj_set_style_radius(ta, 8, 0);
+    /* Focus feedback: bright keyline — there is no visible caret until
+     * the user knows which field is live */
+    lv_obj_set_style_border_color(ta, KAST_COLOR_GREEN, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(ta, 3, LV_STATE_FOCUSED);
+    /* Solid block caret (LV_PART_CURSOR): green background, dark letter */
+    lv_obj_set_style_bg_color(ta, KAST_COLOR_GREEN, LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_text_color(ta, KAST_COLOR_BG, LV_PART_CURSOR);
+    lv_obj_set_style_border_width(ta, 0, LV_PART_CURSOR);
+    lv_obj_set_style_pad_all(ta, 0, LV_PART_CURSOR);
     lv_obj_add_event_cb(ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(ta, ta_defocus_cb, LV_EVENT_DEFOCUSED, NULL);
     return ta;
@@ -93,8 +120,9 @@ static void save_btn_cb(lv_event_t *e)
     }
     ESP_LOGI(TAG, "settings saved (ssid '%s', relay %s:%s)",
              ssid, host[0] ? host : "(unset)", port_text);
-    lv_label_set_text(s_msg_label, "Saved — Wi-Fi re-connecting");
+    lv_label_set_text(s_msg_label, "Saved — applying");
     kast_net_apply_creds(ssid, pass);
+    kast_relay_apply();
 }
 
 void kast_settings_load(lv_obj_t *parent)
@@ -159,12 +187,14 @@ void kast_settings_load(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_msg_label, KAST_COLOR_TEXT_DIM, 0);
     lv_obj_align(s_msg_label, LV_ALIGN_TOP_MID, 0, 226);
 
-    /* Stock keyboard, panel-sized. Attached to whichever field is focused. */
+    /* Stock keyboard, panel-sized. Attached to whichever field is focused.
+     * USER_1 carries the IP layout (digits + dot, defined above). */
     s_keyboard = lv_keyboard_create(parent);
     lv_obj_set_size(s_keyboard, KAST_H_RES, 200);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(s_keyboard, KAST_COLOR_CARD, 0);
     lv_obj_set_style_border_width(s_keyboard, 0, 0);
+    lv_keyboard_set_map(s_keyboard, LV_KEYBOARD_MODE_USER_1, s_kb_host_map, NULL);
 }
 
 void kast_settings_unload(void)

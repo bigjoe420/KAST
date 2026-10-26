@@ -21,6 +21,7 @@
 #include "ui.h"
 #include "net.h"
 #include "sd.h"
+#include "relay.h"
 #include "build_stamp.h"
 
 static const char *TAG = "kast";
@@ -42,6 +43,11 @@ static void kast_power_up_task(void *arg)
     const esp_err_t net_err = kast_net_init();
     if (net_err != ESP_OK) {
         ESP_LOGW(TAG, "Wi-Fi init skipped: %s", esp_err_to_name(net_err));
+    }
+
+    const esp_err_t relay_err = kast_relay_init();
+    if (relay_err != ESP_OK) {
+        ESP_LOGW(TAG, "relay link manager skipped: %s", esp_err_to_name(relay_err));
     }
 
     const esp_err_t sd_err = kast_sd_init();

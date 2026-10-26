@@ -12,6 +12,8 @@ PROGRESS.md
 # --- Secrets & environment ---
 .env
 .env.*
+!.env.example
+!**/.env.example
 *.pem
 *.key
 secrets.h
@@ -46,6 +48,7 @@ docs/datasheets/*.pdf
 scratch/
 session/
 .cache/
+node_modules/
 tools_*.txt
 tools_*.py
 tools_bootlog.txt
