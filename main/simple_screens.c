@@ -1,10 +1,10 @@
 /*
- * simple_screens.c — placeholder pages for CHAT / SCENES / SFX.
+ * simple_screens.c — placeholder pages for SCENES / SFX.
  *
- * Real content arrives with their phases (chat in Phase 3 with the PC
- * relay, scenes/SFX in Phase 4 over OBS WebSocket). These exist so the
- * router is fully navigable now and the nav path gets owner-verified
- * before the heavy modules land on top.
+ * Real content arrives with Phase 4 over OBS WebSocket. These exist so
+ * the router is fully navigable and the nav path got owner-verified
+ * before the heavy modules land on top. (CHAT graduated to
+ * chat_screen.c in Phase 3 slice 1.)
  */
 #include "lvgl.h"
 
@@ -32,15 +32,6 @@ static void placeholder_page(lv_obj_t *parent, const char *title, const char *no
     lv_obj_set_style_text_font(n, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(n, KAST_COLOR_TEXT_DIM, 0);
     lv_obj_align(n, LV_ALIGN_TOP_MID, 0, 120);
-}
-
-void kast_chat_load(lv_obj_t *parent)
-{
-    placeholder_page(parent, "CHAT", "Live chat arrives with the PC relay (Phase 3)");
-}
-
-void kast_chat_unload(void)
-{
 }
 
 void kast_scenes_load(lv_obj_t *parent)

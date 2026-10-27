@@ -22,7 +22,15 @@
 #include "config.h"
 #include "net.h"
 #include "relay.h"
+
+/* Bench creds header: local + gitignored (D-4). Builds without it (CI,
+ * fresh clones) get empty strings — NVS-entered creds are the only path. */
+#if __has_include("wifi_config.h")
 #include "wifi_config.h"
+#else
+#define KAST_WIFI_SSID ""
+#define KAST_WIFI_PASSWORD ""
+#endif
 
 static const char *TAG = "settings";
 
@@ -36,16 +44,27 @@ static lv_obj_t *s_port_ta;
 static lv_obj_t *s_msg_label;
 static lv_obj_t *s_keyboard;
 
-/* Host/port entry layout: digits, dot, backspace — the stock text board
- * buries the period behind a mode switch and IPs are the common case
- * here. The "abc" key is the keyboard's built-in mode-change back to
- * the text board. */
+/* Host/port entry layout: digits with the PERIOD on its own dedicated
+ * key (row 2, right side) — IP entry is the only job of this board, and
+ * hunting the dot behind a mode switch was the #1 settings-page gripe.
+ * Backspace sits top-right; the "abc" key is the keyboard's built-in
+ * mode-change back to the text board (hostnames, if ever needed). */
 static const char *const s_kb_host_map[] = {
-    "1", "2", "3", ".", "\n",
-    "4", "5", "6", LV_SYMBOL_BACKSPACE, "\n",
+    "1", "2", "3", LV_SYMBOL_BACKSPACE, "\n",
+    "4", "5", "6", ".", "\n",
     "7", "8", "9", "0", "\n",
-    "abc", " ", "\n", NULL,
+    "abc", "\n", NULL,
 };
+
+/* Host/port fields always land on the IP board — on focus AND on every
+ * tap (a re-tap of an already-focused field fires no FOCUSED event, and
+ * a mode key pressed in between used to leave the letters board up). */
+static void ta_host_board_cb(lv_event_t *e)
+{
+    lv_obj_t *ta = lv_event_get_target(e);
+    lv_keyboard_set_textarea(s_keyboard, ta);
+    lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_USER_1);
+}
 
 static void ta_focus_cb(lv_event_t *e)
 {
@@ -156,8 +175,12 @@ void kast_settings_load(lv_obj_t *parent)
 
     s_host_ta = make_field(parent, "Relay host (PC IP)", 140, 63);
     lv_textarea_set_text(s_host_ta, host);
+    lv_obj_add_event_cb(s_host_ta, ta_host_board_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_host_ta, ta_host_board_cb, LV_EVENT_CLICKED, NULL);
 
     s_port_ta = make_field(parent, "Relay port", 182, 5);
+    lv_obj_add_event_cb(s_port_ta, ta_host_board_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_port_ta, ta_host_board_cb, LV_EVENT_CLICKED, NULL);
     if (port > 0) {
         char buf[8];
         snprintf(buf, sizeof(buf), "%u", (unsigned)port);

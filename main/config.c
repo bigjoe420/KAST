@@ -4,6 +4,7 @@
  * One namespace ("kast"), string keys. No caching: reads are rare
  * (boot, settings save) and NVS handles wear leveling itself.
  */
+#include <stdio.h>
 #include <string.h>
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -93,4 +94,24 @@ esp_err_t kast_config_save_relay(const char *host, uint16_t port)
     }
     nvs_close(handle);
     return err;
+}
+
+esp_err_t kast_config_load_macro(uint8_t slot, char *text, size_t text_len)
+{
+    if (slot >= KAST_MACRO_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    char key[16];
+    snprintf(key, sizeof(key), "macro%u", (unsigned)slot);
+    return kast_config_load_str(key, text, text_len);
+}
+
+esp_err_t kast_config_save_macro(uint8_t slot, const char *text)
+{
+    if (slot >= KAST_MACRO_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    char key[16];
+    snprintf(key, sizeof(key), "macro%u", (unsigned)slot);
+    return kast_config_save_str(key, text);
 }

@@ -11,6 +11,7 @@
 #include "esp_psram.h"
 #include "esp_log.h"
 #include "esp_app_desc.h"
+#include "esp_system.h"
 #include "nvs_flash.h"
 #include "esp_lcd_types.h"
 #include "esp_lcd_panel_ops.h"
@@ -25,6 +26,30 @@
 #include "build_stamp.h"
 
 static const char *TAG = "kast";
+
+/* Every boot names its killer: brownout, watchdog, panic, or a plain
+ * power-on. The first question in any stability audit is "why did it
+ * reset" — this line answers it without a debugger. */
+static const char *reset_reason_str(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON:    return "power-on";
+    case ESP_RST_EXT:        return "external pin";
+    case ESP_RST_SW:         return "software";
+    case ESP_RST_PANIC:      return "panic";
+    case ESP_RST_INT_WDT:    return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:   return "task watchdog";
+    case ESP_RST_WDT:        return "watchdog";
+    case ESP_RST_DEEPSLEEP:  return "deep sleep";
+    case ESP_RST_SDIO:       return "sdio";
+    case ESP_RST_USB:        return "usb";
+    case ESP_RST_JTAG:       return "jtag";
+    case ESP_RST_EFUSE:      return "efuse error";
+    case ESP_RST_PWR_GLITCH: return "power glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu lockup";
+    default:                 return "unknown";
+    }
+}
 
 /* Power sequencing: a cold boot from battery browns out if the backlight
  * slams to 100% while the panel, PSRAM, and radio all surge at once (the
@@ -74,6 +99,7 @@ void app_main(void)
     const esp_app_desc_t *app = esp_app_get_description();
     ESP_LOGI(TAG, "BUILD: %s (v%s, idf %s)", kast_build_stamp(),
              app->version, app->idf_ver);
+    ESP_LOGI(TAG, "reset: %s", reset_reason_str(esp_reset_reason()));
     ESP_LOGI(TAG, "chip: ESP32-S3 rev %d, %d cores @ %d MHz",
              chip.revision, chip.cores, CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ);
     ESP_LOGI(TAG, "features: WiFi %s, BT %s, embedded-psram %s",

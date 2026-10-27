@@ -3,11 +3,14 @@
  *
  * Creds: NVS first (entered on-device via the settings screen, D-4),
  * falling back to wifi_config.h — a LOCAL, GITIGNORED bench header that
- * never enters version control. With no NVS entry and an empty header
- * the station soft-fails and the UI keeps running.
+ * never enters version control (builds without it get empty strings and
+ * rely on NVS creds alone). With no creds at all the station soft-fails
+ * and the UI keeps running.
  *
- * Policy: reconnect forever with backoff, log every transition, and push
- * status to the status-bar Wi-Fi link word.
+ * Policy: reconnect forever with capped backoff, log every transition,
+ * and push status to the status-bar Wi-Fi link word. A wrong or
+ * unreachable network NEVER reboots the box — slow-retry every 30 s
+ * instead (a reboot loop made on-device settings editing impossible).
  */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -22,12 +25,21 @@
 #include "net.h"
 #include "ui.h"
 #include "config.h"
+
+/* Bench creds header: local + gitignored (D-4). Builds without it (CI,
+ * fresh clones) get empty strings — NVS-entered creds are the only path. */
+#if __has_include("wifi_config.h")
 #include "wifi_config.h"
+#else
+#define KAST_WIFI_SSID ""
+#define KAST_WIFI_PASSWORD ""
+#endif
 
 static const char *TAG = "net";
 
 static uint8_t s_retry = 0;
-#define KAST_NET_MAX_RETRY 10
+#define KAST_NET_MAX_RETRY     10
+#define KAST_NET_SLOW_RETRY_MS 30000
 
 /* Static buffers — the creds path never allocates (K-6). Sized to the
  * driver struct fields (wifi_config_t sta ssid[32] / password[64]). */
@@ -51,19 +63,30 @@ static void kast_net_handler(void *arg, esp_event_base_t base,
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *disc =
             (const wifi_event_sta_disconnected_t *)data;
-        s_retry++;
-        if (s_retry > KAST_NET_MAX_RETRY) {
-            ESP_LOGE(TAG, "give up after %d retries — rebooting to retry clean", KAST_NET_MAX_RETRY);
-            kast_ui_link_status(KAST_LINK_WIFI, false, "FAIL");
-            vTaskDelay(pdMS_TO_TICKS(3000));
-            esp_restart();
+        if (s_retry < KAST_NET_MAX_RETRY + 1) {
+            s_retry++;   /* clamp so the uint8 never wraps into a 0 ms loop */
         }
-        ESP_LOGW(TAG, "disconnected (retry %d/%d) reason=%d rssi=%d",
-                 s_retry, KAST_NET_MAX_RETRY, disc->reason, disc->rssi);
-        kast_ui_link_status(KAST_LINK_WIFI, false, "RETRY");
-        uint32_t backoff_ms = 1000u * s_retry;
-        if (backoff_ms > 15000u) {
-            backoff_ms = 15000u;
+        uint32_t backoff_ms;
+        if (s_retry <= KAST_NET_MAX_RETRY) {
+            ESP_LOGW(TAG, "disconnected (retry %d/%d) reason=%d rssi=%d",
+                     s_retry, KAST_NET_MAX_RETRY, disc->reason, disc->rssi);
+            kast_ui_link_status(KAST_LINK_WIFI, false, "RETRY");
+            backoff_ms = 1000u * s_retry;
+            if (backoff_ms > 15000u) {
+                backoff_ms = 15000u;
+            }
+        } else {
+            /* Retry budget spent: settle into a slow retry forever.
+             * Never esp_restart() here — a wrong/unreachable network is a
+             * config problem, and rebooting turned the terminal into a
+             * boot loop that reset the box under the user's hands while
+             * they were fixing the settings. */
+            if (s_retry == KAST_NET_MAX_RETRY + 1) {
+                ESP_LOGW(TAG, "retry budget spent — slow retry every %ds (no reboot)",
+                         KAST_NET_SLOW_RETRY_MS / 1000);
+                kast_ui_link_status(KAST_LINK_WIFI, false, "FAIL");
+            }
+            backoff_ms = KAST_NET_SLOW_RETRY_MS;
         }
         vTaskDelay(pdMS_TO_TICKS(backoff_ms));
         esp_wifi_connect();
