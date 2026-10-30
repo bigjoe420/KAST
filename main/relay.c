@@ -5,7 +5,11 @@
  *   - connect only while Wi-Fi holds an IP (GOT_IP starts, STA_DISCONNECTED
  *     tears down — reconnect is Wi-Fi's job, not ours)
  *   - the websocket client auto-reconnects on transport errors with
- *     reconnect_timeout_ms backoff; ping every 10 s kills half-opens
+ *     reconnect_timeout_ms backoff; ws PING every 10 s + 20 s PONG watch
+ *     kill half-open sockets, and a supervisor recreates the client if
+ *     the link stays down 30 s (auto-reconnect only covers states the
+ *     library's own state machine visits — owner-seen 2026-10-27: link
+ *     dropped minutes after boot and nothing reconnected, zero logs)
  *   - every state change lands in the status-bar RELAY word
  *
  * Protocol state: Phase 3 slice 1. Chat frames ({"type":"chat","user","text"})
@@ -32,6 +36,8 @@
 #include "ui.h"
 #include "config.h"
 #include "emote.h"
+#include "audio.h"
+#include "esp_heap_caps.h"
 #include "mbedtls/base64.h"
 
 static const char *TAG = "relay";
@@ -78,6 +84,64 @@ static SemaphoreHandle_t s_chat_mtx;
 /* moderation ack one-shot ({"type":"mod.ack","action"}) */
 static char     s_mod_ack[16];
 static volatile bool s_mod_ack_pending;
+
+/* ------------------------------------------------------------------ */
+/* Soundboard catalog (Phase 3)                                        */
+/* ------------------------------------------------------------------ */
+/* Written from the websocket event handler, read from the LVGL task —
+ * same mutex discipline as the chat ring. The relay pushes
+ * {"type":"sfx.catalog","sounds":"id:Name,..."} on connect; ids and
+ * names arrive comma/colon delimited (the relay strips those characters
+ * from file names, so a plain scan is safe). */
+
+static char     s_sfx_id[KAST_SFX_MAX][KAST_SFX_ID_LEN];
+static char     s_sfx_name[KAST_SFX_MAX][KAST_SFX_NAME_LEN];
+static uint32_t s_sfx_count;
+static uint32_t s_sfx_version;
+static StaticSemaphore_t s_sfx_mtx_buf;
+static SemaphoreHandle_t s_sfx_mtx;
+
+/* Parse one "id:Name" pair into slot idx. Returns false when the pair
+ * has no id. Never writes outside the fixed slot buffers. */
+static bool sfx_pair_store(uint32_t idx, const char *pair, size_t len)
+{
+    const char *colon = memchr(pair, ':', len);
+    size_t id_len = colon ? (size_t)(colon - pair) : len;
+    if (id_len == 0) {
+        return false;
+    }
+    if (id_len >= KAST_SFX_ID_LEN) {
+        id_len = KAST_SFX_ID_LEN - 1;
+    }
+    memcpy(s_sfx_id[idx], pair, id_len);
+    s_sfx_id[idx][id_len] = '\0';
+    size_t name_len = 0;
+    if (colon && (size_t)(colon - pair) + 1 < len) {
+        name_len = len - ((size_t)(colon - pair) + 1);
+        if (name_len >= KAST_SFX_NAME_LEN) {
+            name_len = KAST_SFX_NAME_LEN - 1;
+        }
+        memcpy(s_sfx_name[idx], colon + 1, name_len);
+    }
+    s_sfx_name[idx][name_len] = '\0';
+    return true;
+}
+
+/* Replace the whole store from the wire string. Called with the mutex
+ * held (or from init before the link runs). */
+static void sfx_catalog_store(const char *sounds)
+{
+    s_sfx_count = 0;
+    while (s_sfx_count < KAST_SFX_MAX && sounds != NULL && sounds[0] != '\0') {
+        const char *comma = strchr(sounds, ',');
+        size_t len = comma ? (size_t)(comma - sounds) : strlen(sounds);
+        if (sfx_pair_store(s_sfx_count, sounds, len)) {
+            s_sfx_count++;
+        }
+        sounds = comma ? comma + 1 : NULL;
+    }
+    s_sfx_version++;
+}
 
 static void chat_ring_push(const char *id, const char *user, const char *text,
                            const char *emotes)
@@ -217,6 +281,46 @@ static bool json_get_string(const char *json, const char *key,
     return false;
 }
 
+/* Find "key": <unsigned integer> in a flat JSON object. Missing or
+   non-numeric values leave *out untouched and return false. */
+static bool json_get_uint(const char *json, const char *key, uint32_t *out)
+{
+    const char *p = json;
+    while ((p = strchr(p, '"')) != NULL) {
+        char name[24];
+        p++;
+        const char *after = json_parse_string(p, name, sizeof(name));
+        if (after == NULL) {
+            return false;
+        }
+        p = json_skip_ws(after);
+        if (*p != ':') {
+            continue;
+        }
+        p = json_skip_ws(p + 1);
+        if (strcmp(name, key) == 0) {
+            if (*p < '0' || *p > '9') {
+                return false;
+            }
+            uint32_t v = 0;
+            while (*p >= '0' && *p <= '9') {
+                v = v * 10 + (uint32_t)(*p - '0');
+                p++;
+            }
+            *out = v;
+            return true;
+        }
+        if (*p == '"') {
+            /* skip this value's content entirely */
+            p = json_parse_string(p + 1, NULL, 0);
+            if (p == NULL) {
+                return false;
+            }
+        }
+    }
+    return false;
+}
+
 static void strip_char(char *s, char bad)
 {
     char *w = s;
@@ -335,6 +439,162 @@ bool kast_relay_chat_mod_ack(char *action, size_t len)
     return true;
 }
 
+uint32_t kast_relay_sfx_count(void)
+{
+    return s_sfx_count;
+}
+
+bool kast_relay_sfx_get(uint32_t idx, char *id, size_t id_len,
+                        char *name, size_t name_len)
+{
+    if (s_sfx_mtx == NULL || idx >= s_sfx_count) {
+        return false;
+    }
+    if (xSemaphoreTake(s_sfx_mtx, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    if (idx < s_sfx_count) {
+        if (id != NULL && id_len > 0) {
+            snprintf(id, id_len, "%s", s_sfx_id[idx]);
+        }
+        if (name != NULL && name_len > 0) {
+            snprintf(name, name_len, "%s", s_sfx_name[idx]);
+        }
+        xSemaphoreGive(s_sfx_mtx);
+        return true;
+    }
+    xSemaphoreGive(s_sfx_mtx);
+    return false;
+}
+
+uint32_t kast_relay_sfx_version(void)
+{
+    return s_sfx_version;
+}
+
+esp_err_t kast_relay_sfx_play(const char *id)
+{
+    if (s_client == NULL || !s_link_up || id == NULL || id[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char esc[KAST_SFX_ID_LEN];
+    char frame[96];
+    json_escape(id, esc, sizeof(esc));
+    const int n = snprintf(frame, sizeof(frame),
+                           "{\"type\":\"sfx.play\",\"id\":\"%s\"}", esc);
+    if (n < 0 || n >= (int)sizeof(frame)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const int sent = esp_websocket_client_send_text(s_client, frame,
+                                                    (int)strlen(frame),
+                                                    pdMS_TO_TICKS(2000));
+    return sent >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t kast_relay_sfx_audio_req(const char *id)
+{
+    if (s_client == NULL || !s_link_up || id == NULL || id[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char esc[KAST_SFX_ID_LEN];
+    char frame[112];
+    json_escape(id, esc, sizeof(esc));
+    const int n = snprintf(frame, sizeof(frame),
+                           "{\"type\":\"sfx.audio.req\",\"id\":\"%s\"}", esc);
+    if (n < 0 || n >= (int)sizeof(frame)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const int sent = esp_websocket_client_send_text(s_client, frame,
+                                                    (int)strlen(frame),
+                                                    pdMS_TO_TICKS(2000));
+    return sent >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+/* ------------------------------------------------------------------ */
+/* SFX audio delivery: relay streams the mp3 in base64 chunks; the ws  */
+/* handler reassembles into a PSRAM buffer and hands it to the audio   */
+/* task (ownership transfers — audio.c frees it).                      */
+/* ------------------------------------------------------------------ */
+
+#define KAST_SFX_MP3_MAX   (640 * 1024)
+
+static uint8_t *s_sfx_mp3;         /* reassembly buffer, PSRAM */
+static size_t   s_sfx_mp3_cap;
+static size_t   s_sfx_mp3_len;     /* declared total of the current run */
+static size_t   s_sfx_mp3_off;     /* bytes written so far */
+static uint32_t s_sfx_mp3_seq;     /* next expected chunk */
+
+static void sfx_mp3_reset(void)
+{
+    if (s_sfx_mp3 != NULL) {
+        free(s_sfx_mp3);
+        s_sfx_mp3 = NULL;
+    }
+    s_sfx_mp3_cap = s_sfx_mp3_len = s_sfx_mp3_off = 0;
+    s_sfx_mp3_seq = 0;
+}
+
+/* Parse one reassembled sfx.data frame. Runs on the ws event task —
+ * keep it copies-and-accounting only; decode + playback live on the
+ * audio task. */
+static void sfx_mp3_on_frame(const char *frame)
+{
+    /* static, not stack: this runs ON websocket_task (4 KB->8 KB stack)
+     * and a 3.9 KB array here overflowed that task on every sound tap —
+     * coredump-verified 2026-10-27. The ws event handler is a single
+     * task, same justification as s_big and the emote statics. */
+    static char data[3900];
+    data[0] = '\0';
+    if (!json_get_string(frame, "data", data, sizeof(data))) {
+        return;
+    }
+    uint32_t seq = 0, total = 0, end = 0;
+    json_get_uint(frame, "seq", &seq);
+    json_get_uint(frame, "total", &total);
+    json_get_uint(frame, "end", &end);
+    if (total == 0 || total > KAST_SFX_MP3_MAX) {
+        return;
+    }
+    if (seq == 0) {
+        sfx_mp3_reset();
+        s_sfx_mp3 = heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+        if (s_sfx_mp3 == NULL) {
+            s_sfx_mp3 = heap_caps_malloc(total, MALLOC_CAP_8BIT);
+        }
+        if (s_sfx_mp3 == NULL) {
+            ESP_LOGW(TAG, "sfx mp3 buffer alloc failed (%u bytes)", (unsigned)total);
+            return;
+        }
+        s_sfx_mp3_cap = total;
+        s_sfx_mp3_len = total;
+        s_sfx_mp3_seq = 0;
+    }
+    if (s_sfx_mp3 == NULL || seq != s_sfx_mp3_seq || total != s_sfx_mp3_len) {
+        return;   /* stale/mismatched chunk — the run is dead, next tap retries */
+    }
+    size_t b64_len = strlen(data);
+    size_t room = s_sfx_mp3_cap - s_sfx_mp3_off;
+    size_t out_len = 0;
+    if (mbedtls_base64_decode(s_sfx_mp3 + s_sfx_mp3_off, room, &out_len,
+                              (const uint8_t *)data,
+                              b64_len) != 0) {
+        ESP_LOGW(TAG, "sfx chunk %u: bad base64", (unsigned)seq);
+        return;
+    }
+    s_sfx_mp3_off += out_len;
+    s_sfx_mp3_seq++;
+    if (end && s_sfx_mp3_off == s_sfx_mp3_len) {
+        uint8_t *buf = s_sfx_mp3;
+        size_t len = s_sfx_mp3_off;
+        s_sfx_mp3 = NULL;
+        s_sfx_mp3_cap = s_sfx_mp3_len = s_sfx_mp3_off = 0;
+        s_sfx_mp3_seq = 0;
+        ESP_LOGI(TAG, "sfx mp3 complete (%u bytes) — handing to audio task",
+                 (unsigned)len);
+        kast_audio_play_mp3(buf, len);   /* takes ownership; frees on exit */
+    }
+}
+
 static esp_err_t relay_load_endpoint(void)
 {
     esp_err_t err = kast_config_load_relay(s_host, sizeof(s_host), &s_port);
@@ -424,7 +684,22 @@ static void relay_discover_task(void *arg)
     }
 
     if (s_ip_held) {
-        relay_client_start();
+        /* One shot used to be it: if the ws task-create failed (RAM
+         * crunch right after a crash-reboot), the box sat with NO RELAY
+         * until the next reboot — owner-seen 2026-10-27. Retry with
+         * backoff and heap telemetry until it sticks. */
+        for (int attempt = 1; ; attempt++) {
+            const esp_err_t err = relay_client_start();
+            if (err == ESP_OK) {
+                break;
+            }
+            ESP_LOGW(TAG, "relay client start failed (%s), attempt %d — "
+                          "retrying in 5 s (free %u, largest block %u)",
+                     esp_err_to_name(err), attempt,
+                     (unsigned)esp_get_free_heap_size(),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
     }
     vTaskDelete(NULL);
 }
@@ -454,7 +729,22 @@ static esp_err_t relay_client_start(void)
     const esp_websocket_client_config_t cfg = {
         .uri = uri,
         .reconnect_timeout_ms = 3000,
-        /* ping_interval_sec defaults to 10 s — half-open killer (K-5) */
+        /* The 4 KB default overflows the moment a chunky frame arrives:
+         * the EVENT_DATA handler chain runs ON websocket_task and the sfx
+         * path alone parked a 3.9 KB base64 buffer in a stack frame
+         * (coredump-verified 2026-10-27: "stack overflow in task
+         * websocket_task" on every sound tap). The buffer is static now.
+         * Don't bump this casually: every extra KB makes the task-create
+         * allocation harder after a crash-reboot, and a start failure
+         * used to mean NO RELAY until reboot (retry loop below covers
+         * that now). */
+        .task_stack = 8192,
+        /* Half-open killer (K-5), explicit on purpose: the library would
+         * default to ping 10 s + PONG watch 120 s — a dead NAT entry then
+         * keeps the status bar dark for two minutes. 20 s detects it
+         * quickly; ws PINGs also keep the hotspot NAT mapping alive. */
+        .ping_interval_sec = 10,
+        .pingpong_timeout_sec = 20,
     };
     s_client = esp_websocket_client_init(&cfg);
     ESP_RETURN_ON_FALSE(s_client != NULL, ESP_FAIL, TAG, "client init failed");
@@ -478,6 +768,66 @@ static void relay_client_stop(void)
     kast_ui_link_status(KAST_LINK_RELAY, false, NULL);
 }
 
+/* ------------------------------------------------------------------ */
+/* Link supervisor (K-5 hardening)                                     */
+/* ------------------------------------------------------------------ */
+/* The library's auto-reconnect only fires from states its own run loop
+ * visits. Owner-seen 2026-10-27: minutes after a crash-reboot the link
+ * dropped, the relay logged "device disconnected", and the box sat with
+ * a dark RELAY word until power-cycle — alive heartbeats from other
+ * tasks, zero ws log lines, so the client was wedged in a state the
+ * backoff never revisits. This supervisor force-recreates the client
+ * when the link has been down too long. Static task (K-6: no hot-path
+ * heap churn — the ws task-create is exactly what RAM crunch kills).
+ *
+ * stop/start are idempotent against our other callers (apply worker,
+ * Wi-Fi events) via the s_client NULL gate; a worst-case double restart
+ * just costs one extra reconnect. */
+
+#define KAST_LINK_SUPERVISE_MS 5000     /* check cadence */
+#define KAST_LINK_DOWN_LIMIT_MS 30000   /* down this long -> recreate */
+#define KAST_LINK_SUPER_STACK (8 * 1024)
+
+static StaticTask_t s_super_tcb;
+static StackType_t s_super_stack[KAST_LINK_SUPER_STACK / sizeof(StackType_t)];
+
+static void relay_supervisor_task(void *arg)
+{
+    (void)arg;
+    uint32_t down_since_ms = 0;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(KAST_LINK_SUPERVISE_MS));
+        if (!s_ip_held || s_link_up) {
+            down_since_ms = 0;
+            continue;
+        }
+        const uint32_t now_ms = (uint32_t)pdTICKS_TO_MS(xTaskGetTickCount());
+        if (down_since_ms == 0) {
+            down_since_ms = now_ms;
+            continue;
+        }
+        if (now_ms - down_since_ms < KAST_LINK_DOWN_LIMIT_MS) {
+            continue;
+        }
+        ESP_LOGW(TAG, "link supervisor: relay link down %u s — recreating ws client",
+                 (unsigned)((now_ms - down_since_ms) / 1000));
+        down_since_ms = now_ms;   /* re-arm; CONNECTED clears this via s_link_up */
+        if (s_client != NULL) {
+            relay_client_stop();
+        }
+        relay_client_start();   /* failure leaves s_client NULL — retried next tick */
+    }
+}
+
+static void relay_supervisor_start(void)
+{
+    if (xTaskCreateStatic(relay_supervisor_task, "relay_super",
+                          KAST_LINK_SUPER_STACK / sizeof(StackType_t),
+                          NULL, 5, s_super_stack, &s_super_tcb) == NULL) {
+        ESP_LOGW(TAG, "link supervisor create failed — auto-reconnect only");
+    }
+}
+
 static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -490,6 +840,17 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
         s_link_up = true;
         ESP_LOGI(TAG, "connected to ws://%s:%u", s_host, (unsigned)s_port);
         kast_ui_link_status(KAST_LINK_RELAY, true, NULL);
+        /* The relay log retains the boot/reset history across reconnects. */
+        {
+            char hello[128];
+            const int hn = snprintf(hello, sizeof(hello),
+                                    "{\"type\":\"dev.hello\",\"reset\":\"%s\"}",
+                                    kast_config_last_reset_str());
+            if (hn > 0 && hn < (int)sizeof(hello)) {
+                esp_websocket_client_send_text(s_client, hello, hn,
+                                               pdMS_TO_TICKS(2000));
+            }
+        }
         break;
     case WEBSOCKET_EVENT_DISCONNECTED:
         /* without this flag a stale handle makes send_text report success
@@ -540,6 +901,20 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
                 json_get_string(frame, "action", action, sizeof(action));
                 snprintf(s_mod_ack, sizeof(s_mod_ack), "%s", action);
                 s_mod_ack_pending = true;
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "sfx.catalog") == 0) {
+                /* soundboard catalog, pushed on connect: comma-separated
+                   "id:Name" pairs into the fixed store */
+                char sounds[480] = "";
+                json_get_string(frame, "sounds", sounds, sizeof(sounds));
+                xSemaphoreTake(s_sfx_mtx, portMAX_DELAY);
+                sfx_catalog_store(sounds);
+                xSemaphoreGive(s_sfx_mtx);
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "sfx.data") == 0) {
+                /* short trailing chunk of an mp3 stream — same path as
+                   the big-frame reassembly */
+                sfx_mp3_on_frame(frame);
             }
         } else if (evt->payload_len > KAST_CHAT_FRAME_MAX &&
                    evt->payload_len <= KAST_RELAY_BIG_MAX) {
@@ -579,6 +954,10 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
                     } else {
                         ESP_LOGW(TAG, "malformed emote frame dropped");
                     }
+                } else if (json_get_string(s_big, "type", type, sizeof(type)) &&
+                           strcmp(type, "sfx.data") == 0) {
+                    /* soundboard mp3 chunk — reassemble in PSRAM */
+                    sfx_mp3_on_frame(s_big);
                 }
             }
         }
@@ -615,6 +994,7 @@ static void relay_net_handler(void *arg, esp_event_base_t base,
 esp_err_t kast_relay_init(void)
 {
     s_chat_mtx = xSemaphoreCreateMutexStatic(&s_chat_mtx_buf);
+    s_sfx_mtx = xSemaphoreCreateMutexStatic(&s_sfx_mtx_buf);
 
     ESP_RETURN_ON_ERROR(relay_load_endpoint(), TAG, "endpoint load failed");
 
@@ -624,6 +1004,8 @@ esp_err_t kast_relay_init(void)
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
                                                    &relay_net_handler, NULL),
                         TAG, "wifi event register failed");
+
+    relay_supervisor_start();
 
     if (s_host[0] == '\0') {
         ESP_LOGW(TAG, "no relay endpoint configured yet — settings screen sets it");

@@ -1,8 +1,8 @@
 idf_component_register(SRCS "main.c" "build_stamp.c" "display.c" "touch.c" "ui.c" "home_screen.c" "chat_screen.c"
-                            "simple_screens.c" "settings_screen.c" "net.c" "sd.c" "config.c" "relay.c" "emote.c"
+                            "sfx_screen.c" "simple_screens.c" "settings_screen.c" "net.c" "sd.c" "config.c" "relay.c" "emote.c" "audio.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_psram esp_lcd esp_mm esp_wifi esp_event esp_netif nvs_flash
-                                esp_driver_ledc esp_driver_gpio esp_driver_i2c driver esp_driver_sdspi sdmmc fatfs
+                                esp_driver_ledc esp_driver_gpio esp_driver_i2c esp_driver_i2s driver esp_driver_sdspi sdmmc fatfs
                                 esp_app_format mbedtls
                                 espressif__esp_lcd_st7701 espressif__esp_lcd_panel_io_additions
                                 espressif__esp_lcd_touch_gt911

@@ -23,6 +23,8 @@
 #include "net.h"
 #include "sd.h"
 #include "relay.h"
+#include "audio.h"
+#include "config.h"
 #include "build_stamp.h"
 
 static const char *TAG = "kast";
@@ -87,6 +89,7 @@ void app_main(void)
     /* NVS first: config reads (Wi-Fi creds, relay endpoint) happen as
      * soon as net/UI come up. Cheap and flashless — safe pre-ramp. */
     ESP_ERROR_CHECK(nvs_flash_init());
+    kast_config_note_reset((int)esp_reset_reason());
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
@@ -124,6 +127,11 @@ void app_main(void)
      * radio/SD up after the cold-start surge has passed. */
     ESP_ERROR_CHECK(kast_ui_init(panel, touch));
     kast_backlight_set(10);
+
+    /* Speaker: I2S amp (NS4168) reserved for local interface sounds;
+     * decode + playback run on their own task. Pins 1/2/40 per
+     * docs/PINOUT.md. Soundboard audio stays on the stream PC. */
+    ESP_ERROR_CHECK(kast_audio_init());
     xTaskCreate(kast_power_up_task, "kast_pwrup", 4096, NULL, 5, NULL);
 
     while (1) {

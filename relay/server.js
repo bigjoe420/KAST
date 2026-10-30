@@ -36,6 +36,24 @@ const PORT = Number(process.env.KAST_RELAY_PORT || 8765);
 const SIMULATE = process.argv.includes('--simulate-chat');
 let sim_id = 0;   /* simulate-mode chat bounce counter (module scope) */
 
+/* --- persistent log --------------------------------------------------- *
+ * The tray appends our output to relay/tray.log. Earlier the tray did
+ * this by reading our stdout pipe, but every PowerShell pipe-drain design
+ * failed in practice (Peek blocked the UI thread; async DataReceived
+ * events crash with "no Runspace available" because they fire on
+ * threadpool threads). Simplest robust design: we write our own log.
+ * The tray just watches the file, which is all it ever needed. */
+{
+  const log_stream = fs.createWriteStream(path.join(__dirname, 'tray.log'), { flags: 'a' });
+  const tee = (orig) => (...a) => {
+    const s = a.map(String).join(' ');
+    try { log_stream.write(s + '\n'); } catch { /* disk full etc. — stay up */ }
+    orig(s);
+  };
+  console.log = tee(console.log.bind(console));
+  console.error = tee(console.error.bind(console));
+}
+
 /* --- Kick API wiring (OAuth 2.1 + PKCE; secrets from relay/.env) ------ *
  * Token flow: relay prints an authorize URL once, the owner approves in
  * the browser, the localhost callback captures the code, tokens persist
@@ -264,8 +282,9 @@ async function kickMod(action, id, user) {
  * endpoint GET /api/v2/channels/<id>/messages is public and pollable
  * (curl.exe passes the fingerprint check; Node's fetch does not), so the
  * relay polls every couple of seconds and rebroadcasts new messages to
- * the device in the exact frame shape the simulator uses. Messages the
- * device itself sent are skipped by message id so they don't echo.
+ * the device in the exact frame shape the simulator uses — including
+ * the sender's own messages, which paint under the real username exactly
+ * like Kick's own chat does.
  * [emote:ID:Name] tokens become :Name: text tokens; image tiles ride the
  * existing emote.req path. */
 const { execFile } = require('child_process');
@@ -275,7 +294,6 @@ const KICK_POLL_BACKOFF_MS = 10000;
 let kickChatLive = false;
 let kickChatStarting = false;
 const kickSeen = new Set();     /* message ids already handled (bounded) */
-const kickSentEcho = new Set(); /* ids we posted ourselves — never bounce */
 
 function kickNormalizeText(content) {
   return String(content).replace(/\[emote:\d+:([^\]]+)\]/g, ':$1:');
@@ -357,7 +375,11 @@ function kickChatPoll(channelId, roomId, slug) {
           for (const m of fresh) {
             kickSeen.add(String(m.id));
             if (m.type !== 'message') continue;
-            if (kickSentEcho.delete(String(m.id))) continue; /* own send */
+            /* own sends ride back through the poll and SHOULD paint on
+               the glass under the sender's real name, like Kick's own
+               chat does — suppressing them made glass-typed messages
+               vanish (sim bounce is gated off when live, so nothing
+               else rendered them; owner-reported 2026-10-27) */
             const text = kickNormalizeText(m.content).slice(0, 300);
             broadcast({ type: 'chat', user: (m.sender?.username ?? '?').slice(0, 24),
                         id: `kick-${m.id}`.slice(0, 40),
@@ -418,6 +440,136 @@ function synthEmote(code) {
   return buf;
 }
 
+/* --- Soundboard: PC speakers over the relay --------------------------- *
+ * The device page carries no audio decode path; a tap sends
+ * {"type":"sfx.play","id"} and the relay plays the matching file from
+ * relay/sounds/ on the PC's speakers. The catalog rides
+ * {"type":"sfx.catalog","sounds":"id:Name,..."} — comma/colon pairs, not
+ * a JSON array, so the device parser stays string-only. Names are sliced
+ * to 12 chars so a full 12-sound catalog stays under the device's
+ * 512-byte small-frame limit. Sound files are personal content:
+ * relay/sounds/ is gitignored; drop mp3/wav/ogg/m4a files in and they
+ * appear on the glass automatically. */
+
+const SFX_DIR = path.join(__dirname, 'sounds');
+const SFX_EXT = ['.mp3', '.wav', '.ogg', '.m4a'];
+
+function sfxList() {
+  try {
+    return fs.readdirSync(SFX_DIR)
+      .filter((f) => SFX_EXT.includes(path.extname(f).toLowerCase()))
+      .map((f) => path.basename(f, path.extname(f)))
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  } catch {
+    return [];
+  }
+}
+
+/* The wire is comma/colon delimited — those characters can't ride it. */
+function sfxWire(s, max) {
+  return String(s).replace(/[,:|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function sfxCatalogFrame() {
+  const sounds = sfxList().slice(0, 12)
+    .map((id) => `${sfxWire(id, 20)}:${sfxWire(id, 12)}`);
+  return JSON.stringify({ type: 'sfx.catalog', sounds: sounds.join(',') });
+}
+
+function sfxPlay(id) {
+  const file = sfxFindFile(id);
+  if (!file) {
+    console.log(`[relay] sfx.play '${id}' — no matching file in sounds/`);
+    return;
+  }
+  const wav = path.extname(file).toLowerCase() === '.wav';
+  const args = ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden'];
+  if (wav) {
+    const q = file.replace(/'/g, "''");
+    args.push('-Command', `(New-Object System.Media.SoundPlayer '${q}').PlaySync()`);
+  } else {
+    /* WMPlayer can sit at buffering=100 forever for these local MP3s.
+       MCI uses the same built-in Windows codecs and reports real playback
+       progress, so the helper stays alive only until the track stops. */
+    args.push('-File', path.join(__dirname, 'play_sfx.ps1'), '-Path', file);
+  }
+  execFile('powershell.exe', args,
+           (err) => {
+             if (err) {
+               console.log(`[relay] sfx.play '${path.basename(file)}' failed: ${err.message}`);
+             } else {
+               console.log(`[relay] sfx.play '${path.basename(file)}'`);
+             }
+           });
+}
+
+/* --- SFX audio delivery: stream the mp3 to the device speaker -------- *
+ * The device asks with {"type":"sfx.audio.req","id"} right after its
+ * sfx.play; the relay answers with a paced run of
+ * {"type":"sfx.data","seq","total","end","data"} frames — base64 chunks
+ * sized to stay inside the device's 4 KB big-frame reassembly window.
+ * 640 KB caps a track at roughly 40 s at typical effect bitrates. */
+
+const SFX_CHUNK_RAW = 2900;   /* ~3.9 KB base64 per frame, under the 4 KB limit */
+const SFX_CHUNK_GAP_MS = 70;  /* pacing: the device appends on the ws task */
+
+function sfxFindFile(id) {
+  const safe = sfxWire(id, 20).toLowerCase();
+  if (!safe) return null;
+  try {
+    const hit = fs.readdirSync(SFX_DIR)
+      .find((f) => sfxWire(path.basename(f, path.extname(f)), 20).toLowerCase() === safe);
+    return hit ? path.join(SFX_DIR, hit) : null;
+  } catch {
+    return null;
+  }
+}
+
+function sfxStreamAudio(id, ws) {
+  const file = sfxFindFile(id);
+  if (!file) {
+    console.log(`[relay] sfx.audio.req '${id}' — no matching file in sounds/`);
+    return;
+  }
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch (err) {
+    console.log(`[relay] sfx.audio.req read failed: ${err.message}`);
+    return;
+  }
+  if (buf.length > 640 * 1024) {
+    console.log(`[relay] sfx.audio.req '${path.basename(file)}' too big ` +
+                `(${buf.length} bytes > 640 KB) — device stream skipped`);
+    return;
+  }
+  const name = path.basename(file);
+  console.log(`[relay] sfx.audio.req '${name}' — streaming ${buf.length} bytes ` +
+              `in ${Math.ceil(buf.length / SFX_CHUNK_RAW)} chunks`);
+  for (let seq = 0, off = 0; off < buf.length || seq === 0; seq++) {
+    const chunk = buf.subarray(off, off + SFX_CHUNK_RAW);
+    const end = off + chunk.length >= buf.length ? 1 : 0;
+    const frame = JSON.stringify({
+      type: 'sfx.data', id: sfxWire(id, 20), seq,
+      total: buf.length, end,
+      data: chunk.toString('base64'),
+    });
+    /* capture seq/off NOW — the setTimeout callback must not see the
+       loop variables of a later iteration */
+    const send = () => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(frame);
+      }
+    };
+    if (end) {
+      setTimeout(send, seq * SFX_CHUNK_GAP_MS);
+      break;
+    }
+    setTimeout(send, seq * SFX_CHUNK_GAP_MS);
+    off += chunk.length;
+  }
+}
+
 /* --- discovery beacon (D-15: zero IP typing) ------------------------- *
  * UDP broadcast, not mDNS: port 5353 is often held by other apps on a
  * streaming PC (dev tools, Bonjour, Chrome), which blocks rebinding it.
@@ -461,6 +613,7 @@ wss.on('connection', (ws, req) => {
   console.log(`[relay] device connected (${req.socket.remoteAddress}), ${clients.size} client(s)`);
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify({ type: 'hello', app: 'kast-relay', version: '0.1.0' }));
+    ws.send(sfxCatalogFrame());
   }
 
   ws.on('message', (data) => {
@@ -475,13 +628,13 @@ wss.on('connection', (ws, req) => {
       case 'ping':
         ws.send(JSON.stringify({ type: 'pong', t: Date.now() }));
         break;
+      case 'dev.hello':
+        /* Device boot telemetry: the previous reset reason survives in NVS. */
+        console.log(`[relay] device boot: reset=${msg.reset}`);
+        break;
       case 'chat.send':
         if (kickReady()) {
           kickSendChat(msg.text).then((mid) => {
-            if (mid != null) {
-              if (kickSentEcho.size > 200) kickSentEcho.clear();
-              kickSentEcho.add(String(mid));
-            }
             console.log(`[relay] kick chat.send ok (message_id ${mid})`);
           }).catch((err) => {
             console.log(`[relay] kick chat.send failed: ${err.message}`);
@@ -499,6 +652,18 @@ wss.on('connection', (ws, req) => {
                       emotes: scanEmotes(text),
                       text, ts: Date.now() });
         }
+        break;
+      case 'sfx.play':
+        /* device tapped a soundboard tile */
+        sfxPlay(msg.id);
+        break;
+      case 'sfx.audio.req':
+        /* device wants the mp3 for its own speaker (monitor path) */
+        sfxStreamAudio(msg.id, ws);
+        break;
+      case 'sfx.catalog':
+        /* device re-requests (e.g. after new files land on the PC) */
+        ws.send(sfxCatalogFrame());
         break;
       case 'emote.req':
         /* device wants an emote tile — synthesize in simulate; with Kick

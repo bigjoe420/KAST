@@ -43,3 +43,15 @@ CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_32=y
+
+# --- Crash forensics: panic backtrace lands in the 'coredump' flash
+# partition (see partitions.csv); read it back with espcoredump.py after
+# a field crash — no serial timing race with a human-in-the-loop bench.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+# --- Panic-handler headroom: with stack-overflow CANARY checks the panic
+# often runs on the IDLE task's stack, and the default 1536 B starves the
+# coredump writer mid-dump (field-observed 2026-10-27: partition held
+# body-without-header garbage after every crash). 4096 lets the dump
+# finish so the backtrace survives.
+CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096

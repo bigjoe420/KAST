@@ -49,6 +49,9 @@ docs/datasheets/*.pdf
 *.swp
 companion/bench-mode.txt
 tools/audit_capture.txt
+
+# --- Personal content (never versioned) ---
+relay/sounds/
 scratch/
 session/
 .cache/
@@ -56,3 +59,4 @@ node_modules/
 tools_*.txt
 tools_*.py
 tools_bootlog.txt
+buildboot*.txt

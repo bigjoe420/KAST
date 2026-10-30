@@ -6,6 +6,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include "esp_system.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
@@ -114,4 +115,50 @@ esp_err_t kast_config_save_macro(uint8_t slot, const char *text)
     char key[16];
     snprintf(key, sizeof(key), "macro%u", (unsigned)slot);
     return kast_config_save_str(key, text);
+}
+
+/* Crash forensics (see config.h): remember WHY this boot happened.
+ * esp_reset_reason() already names the previous boot's killer (panic,
+ * watchdog, brownout...) and stays valid all boot, so the relay report
+ * is just that mapping kept in RAM. We also persist the code in NVS as
+ * a breadcrumb a later tool can read even if the boot dies before the
+ * relay link comes up. Call FIRST in app_main. */
+static char s_last_reset[24] = "unknown";
+
+static const char *cfg_reset_reason_str(int r)
+{
+    switch ((esp_reset_reason_t)r) {
+    case ESP_RST_POWERON:    return "power-on";
+    case ESP_RST_EXT:        return "external pin";
+    case ESP_RST_SW:         return "software";
+    case ESP_RST_PANIC:      return "panic";
+    case ESP_RST_INT_WDT:    return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:   return "task watchdog";
+    case ESP_RST_WDT:        return "watchdog";
+    case ESP_RST_DEEPSLEEP:  return "deep sleep";
+    case ESP_RST_SDIO:       return "sdio";
+    case ESP_RST_USB:        return "usb";
+    case ESP_RST_JTAG:       return "jtag";
+    case ESP_RST_EFUSE:      return "efuse error";
+    case ESP_RST_PWR_GLITCH: return "power glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu lockup";
+    default:                 return "unknown";
+    }
+}
+
+void kast_config_note_reset(int reset_code)
+{
+    snprintf(s_last_reset, sizeof(s_last_reset), "%s",
+             cfg_reset_reason_str(reset_code));
+    nvs_handle_t handle;
+    if (nvs_open(KAST_CFG_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, "last_reset", (uint8_t)reset_code);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+
+const char *kast_config_last_reset_str(void)
+{
+    return s_last_reset;
 }

@@ -2,6 +2,10 @@
 # Factory app gets 3 MB: LVGL + chat UI + OBS/SFX modules grow fast, and
 # the ws/mbedtls stack already pushed the SINGLE_APP_LARGE layout over.
 # NVS stays at 0x9000 so on-device Wi-Fi creds survive reflashes.
+# coredump (64K) captures the panic backtrace to flash — the field
+# forensics path: owner taps, board reboots, we read the crash site
+# afterwards with espcoredump.py. No serial timing race.
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 0x300000,
+coredump, data, coredump,0x320000,0x10000,

@@ -35,6 +35,15 @@ esp_err_t kast_config_save_relay(const char *host, uint16_t port);
 esp_err_t kast_config_load_macro(uint8_t slot, char *text, size_t text_len);
 esp_err_t kast_config_save_macro(uint8_t slot, const char *text);
 
+/* Crash forensics for the field: this boot's reset reason (i.e. why the
+ * previous boot died — panic, watchdog, brownout...), kept in RAM and
+ * handed to the relay as a dev.hello frame on connect — serial logs
+ * scroll away before anyone can read them remotely, but the relay log
+ * waits. The code is also persisted in NVS as a breadcrumb. Call
+ * kast_config_note_reset() FIRST in app_main. */
+void kast_config_note_reset(int reset_code);
+const char *kast_config_last_reset_str(void);   /* this boot's */
+
 #ifdef __cplusplus
 }
 #endif

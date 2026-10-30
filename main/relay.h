@@ -84,6 +84,41 @@ bool kast_relay_chat_mod_ack(char *action, size_t len);
  */
 esp_err_t kast_relay_emote_request(const char *code);
 
+/* ------------------------------------------------------------------ */
+/* Soundboard (Phase 3)                                                */
+/* ------------------------------------------------------------------ */
+
+#define KAST_SFX_MAX       12
+#define KAST_SFX_ID_LEN    21   /* wire ids are <= 20 chars */
+#define KAST_SFX_NAME_LEN  13   /* wire names are <= 12 chars */
+
+/* How many sounds the relay's catalog currently holds (0..KAST_SFX_MAX).
+ * The relay pushes {"type":"sfx.catalog","sounds":"id:Name,..."} on
+ * connect; safe to call from the LVGL task. */
+uint32_t kast_relay_sfx_count(void);
+
+/* Copy sound idx's id/name out (bounded by the KAST_SFX_*_LEN sizes) and
+ * return true, or false when idx is out of range. LVGL task safe. */
+bool kast_relay_sfx_get(uint32_t idx, char *id, size_t id_len,
+                        char *name, size_t name_len);
+
+/* Bumps every time a catalog frame replaces the store — the SFX screen
+ * polls this and rebuilds its grid only on a change. LVGL task safe. */
+uint32_t kast_relay_sfx_version(void);
+
+/* Soundboard trigger: send {"type":"sfx.play","id"} — the PC relay plays
+ * the matching file from relay/sounds/ on its speakers. Safe to call from
+ * the LVGL task; blocks up to 2 s on the socket. ESP_ERR_INVALID_STATE
+ * when the link is down or id is empty. */
+esp_err_t kast_relay_sfx_play(const char *id);
+
+/* Ask the relay to stream the sound's mp3 down to the device speaker
+ * (soundboard monitor path): the relay answers with a run of
+ * {"type":"sfx.data","seq","total","end","data"} base64 chunks that
+ * relay.c reassembles and hands to kast_audio_play_mp3(). Send right
+ * alongside kast_relay_sfx_play() — same rules. */
+esp_err_t kast_relay_sfx_audio_req(const char *id);
+
 #ifdef __cplusplus
 }
 #endif

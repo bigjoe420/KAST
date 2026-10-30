@@ -1,10 +1,10 @@
 /*
- * simple_screens.c — placeholder pages for SCENES / SFX.
+ * simple_screens.c — placeholder page for SCENES.
  *
- * Real content arrives with Phase 4 over OBS WebSocket. These exist so
+ * Real content arrives with Phase 4 over OBS WebSocket. This exists so
  * the router is fully navigable and the nav path got owner-verified
  * before the heavy modules land on top. (CHAT graduated to
- * chat_screen.c in Phase 3 slice 1.)
+ * chat_screen.c and SFX to sfx_screen.c in Phase 3.)
  */
 #include "lvgl.h"
 
@@ -40,14 +40,5 @@ void kast_scenes_load(lv_obj_t *parent)
 }
 
 void kast_scenes_unload(void)
-{
-}
-
-void kast_sfx_load(lv_obj_t *parent)
-{
-    placeholder_page(parent, "SFX", "Soundboard triggers arrive in Phase 4");
-}
-
-void kast_sfx_unload(void)
 {
 }
