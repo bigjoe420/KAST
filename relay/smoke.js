@@ -6,6 +6,8 @@
  * failure. Run: npm test (from relay/).
  */
 process.env.KAST_RELAY_PORT = '18765';
+process.env.KAST_OBS_ENABLED = '0';
+process.env.KAST_KICK_ENABLED = '0';
 
 const { spawn } = require('child_process');
 const WebSocket = require('ws');

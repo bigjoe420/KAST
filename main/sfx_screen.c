@@ -7,9 +7,9 @@
  * store's version on a timer and rebuilds the grid only when it changes
  * (K-4: no allocation churn — tiles are rebuilt on change, never per tap).
  *
- * A tap sends {"type":"sfx.play","id"}; the PC relay plays the file on
- * the stream PC's speakers. The device itself stays silent — the I2S amp
- * is future on-device alert scope (ROADMAP v2).
+ * A tap sends {"type":"sfx.play","id"}; the relay restarts the matching
+ * OBS media source. OBS supplies stream output and local monitoring. The
+ * device itself stays silent — its I2S amp is for separate local alerts.
  */
 #include <stdio.h>
 

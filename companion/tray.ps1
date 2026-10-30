@@ -1,4 +1,4 @@
-﻿# KAST Companion — tray host for the PC relay (D-15).
+# KAST Companion — tray host for the PC relay (D-15).
 #
 # Double-clickable: keeps the relay running with no terminal window,
 # advertises it with a UDP discovery beacon (device auto-finds the PC —
@@ -74,6 +74,96 @@ function Start-Relay {
     $script:lastLogPos = 0
 }
 
+function Update-RelayEnv {
+    param([hashtable]$Values)
+    $envFile = Join-Path $relayDir '.env'
+    $lines = if (Test-Path $envFile) { @(Get-Content $envFile) } else { @() }
+    foreach ($key in $Values.Keys) {
+        $replacement = "$key=$($Values[$key])"
+        $found = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^\s*$key\s*=") { $lines[$i] = $replacement; $found = $true }
+        }
+        if (-not $found) { $lines += $replacement }
+    }
+    Set-Content -Path $envFile -Value $lines -Encoding UTF8
+}
+
+function Invoke-ObsCommand {
+    param([string]$Action, [string]$Value = '')
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $script:nodeExe
+    $psi.Arguments = if ($Value -eq '') { "obs_command.js $Action" } else { "obs_command.js $Action $Value" }
+    $psi.WorkingDirectory = $relayDir.Path
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $p.StandardOutput.ReadToEnd()
+    $stderr = $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    if ($p.ExitCode -ne 0) { throw $stderr.Trim() }
+    return $stdout.Trim()
+}
+
+function Show-ObsSetup {
+    $running = Get-Process obs64 -ErrorAction SilentlyContinue
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Set up KAST with OBS'
+    $form.Size = New-Object System.Drawing.Size(540, 330)
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $label = New-Object System.Windows.Forms.Label
+    $label.Location = New-Object System.Drawing.Point(18, 16)
+    $label.Size = New-Object System.Drawing.Size(490, 105)
+    $label.Text = "In OBS: Tools > WebSocket Server Settings.`r`nEnable the server, keep port 4455, then enter its password below.`r`nLeave the password blank only if OBS authentication is disabled.`r`n`r`nKAST adds only its own SFX scene and sources. Your scenes stay untouched."
+    $form.Controls.Add($label)
+    $pwLabel = New-Object System.Windows.Forms.Label
+    $pwLabel.Text = 'OBS WebSocket password'
+    $pwLabel.Location = New-Object System.Drawing.Point(18, 132)
+    $pwLabel.Size = New-Object System.Drawing.Size(190, 24)
+    $form.Controls.Add($pwLabel)
+    $pw = New-Object System.Windows.Forms.TextBox
+    $pw.Location = New-Object System.Drawing.Point(210, 128)
+    $pw.Size = New-Object System.Drawing.Size(290, 24)
+    $pw.UseSystemPasswordChar = $true
+    $form.Controls.Add($pw)
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Save and connect'
+    $ok.Location = New-Object System.Drawing.Point(210, 180)
+    $ok.Size = New-Object System.Drawing.Size(140, 34)
+    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.AcceptButton = $ok
+    $form.Controls.Add($ok)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel'
+    $cancel.Location = New-Object System.Drawing.Point(360, 180)
+    $cancel.Size = New-Object System.Drawing.Size(90, 34)
+    $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.CancelButton = $cancel
+    $form.Controls.Add($cancel)
+    if (-not $running) {
+        $label.Text += "`r`n`r`nOBS is not running yet. You can save now, then open OBS."
+        $form.Height = 370
+    }
+    if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+    Update-RelayEnv @{ KAST_OBS_ENABLED = '1'; KAST_OBS_URL = 'ws://127.0.0.1:4455'; KAST_OBS_PASSWORD = $pw.Text }
+    Start-Relay
+    if ($running) {
+        Start-Sleep -Seconds 2
+        try {
+            Invoke-ObsCommand 'setup' | Out-Null
+            & $balloon 'KAST OBS' 'Connected. KAST SFX is ready — use Test OBS sound to hear it.' 'Info'
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'KAST OBS setup needs attention', 'OK', 'Warning') | Out-Null
+        }
+    } else {
+        & $balloon 'KAST OBS' 'Settings saved. OBS will connect automatically when it is running.' 'Info'
+    }
+}
+
 function Set-FirewallRules {
     # needs admin; failure is fine — the relay just won't be reachable
     # until the owner allows inbound TCP 8765 / UDP 5353 manually
@@ -102,6 +192,17 @@ $miLogs = $menu.Items.Add('Open relay folder')
 $miCopy = $menu.Items.Add('Copy device target (IP:port)')
 $miAuth = $menu.Items.Add('Authorize with Kick...')
 $miAuth.Visible = $false
+$menu.Items.Add('-') | Out-Null
+$miObsStatus = $menu.Items.Add('OBS: not connected')
+$miObsStatus.Enabled = $false
+$miObsSetup = $menu.Items.Add('Setup OBS...')
+$miObsTest = $menu.Items.Add('Test OBS sound')
+$miSoundLibrary = $menu.Items.Add('Sound Library...')
+$miObsVolume = $menu.Items.Add('SFX volume')
+$miObsVol50 = $miObsVolume.DropDownItems.Add('50%')
+$miObsVol100 = $miObsVolume.DropDownItems.Add('100%')
+$miObsVol150 = $miObsVolume.DropDownItems.Add('150%')
+$miObsRemove = $menu.Items.Add('Remove KAST SFX Setup')
 $menu.Items.Add('-') | Out-Null
 $miQuit = $menu.Items.Add('Quit')
 $icon.ContextMenuStrip = $menu
@@ -132,6 +233,27 @@ $miBench.Add_Click({
     Start-Relay
 })
 $miLogs.Add_Click({ Start-Process explorer.exe $relayDir.Path })
+$miObsSetup.Add_Click({ Show-ObsSetup })
+$miSoundLibrary.Add_Click({
+    $scriptPath = Join-Path $companionDir 'sound_library.ps1'
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
+})
+$miObsTest.Add_Click({
+    try { & $balloon 'KAST OBS' (Invoke-ObsCommand 'test') 'Info' }
+    catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'KAST OBS test failed', 'OK', 'Warning') | Out-Null }
+})
+$miObsVol50.Add_Click({ try { Invoke-ObsCommand 'volume' '0.5' | Out-Null } catch { & $balloon 'KAST OBS' $_.Exception.Message 'Warning' } })
+$miObsVol100.Add_Click({ try { Invoke-ObsCommand 'volume' '1' | Out-Null } catch { & $balloon 'KAST OBS' $_.Exception.Message 'Warning' } })
+$miObsVol150.Add_Click({ try { Invoke-ObsCommand 'volume' '1.5' | Out-Null } catch { & $balloon 'KAST OBS' $_.Exception.Message 'Warning' } })
+$miObsRemove.Add_Click({
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        'Remove only the KAST SFX scene and KAST SFX sources from OBS?',
+        'Remove KAST SFX Setup', 'YesNo', 'Question')
+    if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+        try { & $balloon 'KAST OBS' (Invoke-ObsCommand 'remove') 'Info' }
+        catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'KAST OBS cleanup failed', 'OK', 'Warning') | Out-Null }
+    }
+})
 $miCopy.Add_Click({
     $ip = Get-LanIp
     if ($ip) { Set-Clipboard -Value "${ip}:8765" } else { Set-Clipboard -Value '' }
@@ -232,6 +354,13 @@ $timer.Add_Tick({
                             } elseif ($l -match 'Kick authorized') {
                                 $script:kickAuthUrl = $null
                                 $miAuth.Visible = $false
+                            } elseif ($l -match '\[obs\] connected') {
+                                $miObsStatus.Text = 'OBS: connected'
+                            } elseif ($l -match '\[obs\] auth_failed') {
+                                $miObsStatus.Text = 'OBS: wrong password — run Setup OBS'
+                                & $balloon 'KAST OBS' 'OBS rejected the password. Choose Setup OBS to fix it.' 'Warning'
+                            } elseif ($l -match '\[obs\] (disconnected|connecting|identifying)') {
+                                $miObsStatus.Text = 'OBS: not connected'
                             }
                         }
                         $script:lastLogPos = $sr.BaseStream.Position

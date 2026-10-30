@@ -106,10 +106,10 @@ bool kast_relay_sfx_get(uint32_t idx, char *id, size_t id_len,
  * polls this and rebuilds its grid only on a change. LVGL task safe. */
 uint32_t kast_relay_sfx_version(void);
 
-/* Soundboard trigger: send {"type":"sfx.play","id"} — the PC relay plays
- * the matching file from relay/sounds/ on its speakers. Safe to call from
- * the LVGL task; blocks up to 2 s on the socket. ESP_ERR_INVALID_STATE
- * when the link is down or id is empty. */
+/* Soundboard trigger: send {"type":"sfx.play","id"} — the relay restarts
+ * the matching OBS media source for stream output and local monitoring.
+ * Safe to call from the LVGL task; blocks up to 2 s on the socket.
+ * ESP_ERR_INVALID_STATE when the link is down or id is empty. */
 esp_err_t kast_relay_sfx_play(const char *id);
 
 /* Ask the relay to stream the sound's mp3 down to the device speaker

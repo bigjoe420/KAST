@@ -911,10 +911,23 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
                 sfx_catalog_store(sounds);
                 xSemaphoreGive(s_sfx_mtx);
             } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "obs.status") == 0) {
+                char status[20] = "";
+                json_get_string(frame, "status", status, sizeof(status));
+                const bool ok = strcmp(status, "connected") == 0;
+                kast_ui_link_status(KAST_LINK_OBS, ok,
+                                    ok ? NULL : (strcmp(status, "auth_failed") == 0 ? "AUTH" : "--"));
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "sfx.ack") == 0) {
+                /* A failed trigger is visible even when the transport and
+                   OBS socket are healthy (missing media, rejected request). */
+                if (strstr(frame, "\"ok\":false") != NULL) {
+                    kast_ui_link_status(KAST_LINK_OBS, false, "FAIL");
+                }
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
                        strcmp(type, "sfx.data") == 0) {
-                /* short trailing chunk of an mp3 stream — same path as
-                   the big-frame reassembly */
-                sfx_mp3_on_frame(frame);
+                /* legacy frames are ignored: soundboard audio lives in OBS */
+                ESP_LOGW(TAG, "retired sfx.data frame ignored");
             }
         } else if (evt->payload_len > KAST_CHAT_FRAME_MAX &&
                    evt->payload_len <= KAST_RELAY_BIG_MAX) {

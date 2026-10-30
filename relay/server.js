@@ -94,7 +94,7 @@ function kickSaveTokens() {
 }
 
 function kickReady() {
-  return kickTokens != null && kickTokens.access_token;
+  return process.env.KAST_KICK_ENABLED !== '0' && kickTokens != null && kickTokens.access_token;
 }
 
 async function kickTokenRequest(form) {
@@ -440,29 +440,26 @@ function synthEmote(code) {
   return buf;
 }
 
-/* --- Soundboard: PC speakers over the relay --------------------------- *
- * The device page carries no audio decode path; a tap sends
- * {"type":"sfx.play","id"} and the relay plays the matching file from
- * relay/sounds/ on the PC's speakers. The catalog rides
- * {"type":"sfx.catalog","sounds":"id:Name,..."} — comma/colon pairs, not
- * a JSON array, so the device parser stays string-only. Names are sliced
- * to 12 chars so a full 12-sound catalog stays under the device's
- * 512-byte small-frame limit. Sound files are personal content:
- * relay/sounds/ is gitignored; drop mp3/wav/ogg/m4a files in and they
- * appear on the glass automatically. */
+/* --- Soundboard: OBS media sources over one shared WebSocket ---------- *
+ * The ESP32 sends only {"type":"sfx.play","id"}. OBS supplies both stream
+ * output and local monitoring; no audio is transferred to or decoded on
+ * the device. KAST creates and removes only its exact managed names. */
 
 const SFX_DIR = path.join(__dirname, 'sounds');
-const SFX_EXT = ['.mp3', '.wav', '.ogg', '.m4a'];
+const STARTER_SFX_DIR = path.join(__dirname, 'starter_sounds');
+const { ObsClient } = require('./obs');
+const { ObsSfx } = require('./obs_sfx');
+const soundLibrary = require('./sound_library');
+
+try {
+  const installed = soundLibrary.installStarter({ starterDir: STARTER_SFX_DIR, soundsDir: SFX_DIR });
+  if (installed.length) console.log(`[relay] installed starter sounds: ${installed.join(', ')}`);
+} catch (err) {
+  console.log(`[relay] starter sound setup failed: ${err.message}`);
+}
 
 function sfxList() {
-  try {
-    return fs.readdirSync(SFX_DIR)
-      .filter((f) => SFX_EXT.includes(path.extname(f).toLowerCase()))
-      .map((f) => path.basename(f, path.extname(f)))
-      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-  } catch {
-    return [];
-  }
+  return soundLibrary.listSounds(SFX_DIR).slice(0, soundLibrary.MAX_SOUNDS).map((entry) => entry.id);
 }
 
 /* The wire is comma/colon delimited — those characters can't ride it. */
@@ -470,103 +467,58 @@ function sfxWire(s, max) {
   return String(s).replace(/[,:|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function sfxFindFile(id) {
+  const safe = sfxWire(id, 20).toLowerCase();
+  return soundLibrary.listSounds(SFX_DIR).find((entry) => entry.id.toLowerCase() === safe)?.file || null;
+}
+
 function sfxCatalogFrame() {
-  const sounds = sfxList().slice(0, 12)
-    .map((id) => `${sfxWire(id, 20)}:${sfxWire(id, 12)}`);
+  const sounds = sfxList().map((id) => `${sfxWire(id, 20)}:${sfxWire(id, 12)}`);
   return JSON.stringify({ type: 'sfx.catalog', sounds: sounds.join(',') });
 }
 
-function sfxPlay(id) {
-  const file = sfxFindFile(id);
-  if (!file) {
-    console.log(`[relay] sfx.play '${id}' — no matching file in sounds/`);
-    return;
-  }
-  const wav = path.extname(file).toLowerCase() === '.wav';
-  const args = ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden'];
-  if (wav) {
-    const q = file.replace(/'/g, "''");
-    args.push('-Command', `(New-Object System.Media.SoundPlayer '${q}').PlaySync()`);
-  } else {
-    /* WMPlayer can sit at buffering=100 forever for these local MP3s.
-       MCI uses the same built-in Windows codecs and reports real playback
-       progress, so the helper stays alive only until the track stops. */
-    args.push('-File', path.join(__dirname, 'play_sfx.ps1'), '-Path', file);
-  }
-  execFile('powershell.exe', args,
-           (err) => {
-             if (err) {
-               console.log(`[relay] sfx.play '${path.basename(file)}' failed: ${err.message}`);
-             } else {
-               console.log(`[relay] sfx.play '${path.basename(file)}'`);
-             }
-           });
+function sfxEntries() {
+  return soundLibrary.listSounds(SFX_DIR).slice(0, soundLibrary.MAX_SOUNDS);
 }
 
-/* --- SFX audio delivery: stream the mp3 to the device speaker -------- *
- * The device asks with {"type":"sfx.audio.req","id"} right after its
- * sfx.play; the relay answers with a paced run of
- * {"type":"sfx.data","seq","total","end","data"} frames — base64 chunks
- * sized to stay inside the device's 4 KB big-frame reassembly window.
- * 640 KB caps a track at roughly 40 s at typical effect bitrates. */
+const obsClient = new ObsClient({
+  url: process.env.KAST_OBS_URL || 'ws://127.0.0.1:4455',
+  password: process.env.KAST_OBS_PASSWORD || '',
+});
+const obsSfx = new ObsSfx({
+  client: obsClient, listSounds: sfxEntries,
+  volume: Number(process.env.KAST_SFX_VOLUME || 1),
+});
+obsClient.on('state', (state) => {
+  console.log(`[obs] ${state.status}${state.detail ? ` — ${state.detail}` : ''}`);
+  broadcast({ type: 'obs.status', status: state.status, detail: state.detail });
+});
 
-const SFX_CHUNK_RAW = 2900;   /* ~3.9 KB base64 per frame, under the 4 KB limit */
-const SFX_CHUNK_GAP_MS = 70;  /* pacing: the device appends on the ws task */
-
-function sfxFindFile(id) {
-  const safe = sfxWire(id, 20).toLowerCase();
-  if (!safe) return null;
+async function sfxPlay(id, ws) {
   try {
-    const hit = fs.readdirSync(SFX_DIR)
-      .find((f) => sfxWire(path.basename(f, path.extname(f)), 20).toLowerCase() === safe);
-    return hit ? path.join(SFX_DIR, hit) : null;
-  } catch {
-    return null;
-  }
-}
-
-function sfxStreamAudio(id, ws) {
-  const file = sfxFindFile(id);
-  if (!file) {
-    console.log(`[relay] sfx.audio.req '${id}' — no matching file in sounds/`);
-    return;
-  }
-  let buf;
-  try {
-    buf = fs.readFileSync(file);
+    const sound = await obsSfx.play(sfxWire(id, 20));
+    console.log(`[relay] sfx.play '${path.basename(sound.file)}' via OBS`);
+    const ack = { type: 'sfx.ack', id: sfxWire(id, 20), ok: true };
+    if (ws) ws.send(JSON.stringify(ack)); else broadcast(ack);
+    return true;
   } catch (err) {
-    console.log(`[relay] sfx.audio.req read failed: ${err.message}`);
-    return;
+    console.log(`[relay] sfx.play '${id}' failed: ${err.message}`);
+    const ack = { type: 'sfx.ack', id: sfxWire(id, 20), ok: false, error: err.message.slice(0, 120) };
+    if (ws) ws.send(JSON.stringify(ack)); else broadcast(ack);
+    return false;
   }
-  if (buf.length > 640 * 1024) {
-    console.log(`[relay] sfx.audio.req '${path.basename(file)}' too big ` +
-                `(${buf.length} bytes > 640 KB) — device stream skipped`);
-    return;
-  }
-  const name = path.basename(file);
-  console.log(`[relay] sfx.audio.req '${name}' — streaming ${buf.length} bytes ` +
-              `in ${Math.ceil(buf.length / SFX_CHUNK_RAW)} chunks`);
-  for (let seq = 0, off = 0; off < buf.length || seq === 0; seq++) {
-    const chunk = buf.subarray(off, off + SFX_CHUNK_RAW);
-    const end = off + chunk.length >= buf.length ? 1 : 0;
-    const frame = JSON.stringify({
-      type: 'sfx.data', id: sfxWire(id, 20), seq,
-      total: buf.length, end,
-      data: chunk.toString('base64'),
-    });
-    /* capture seq/off NOW — the setTimeout callback must not see the
-       loop variables of a later iteration */
-    const send = () => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(frame);
-      }
-    };
-    if (end) {
-      setTimeout(send, seq * SFX_CHUNK_GAP_MS);
-      break;
-    }
-    setTimeout(send, seq * SFX_CHUNK_GAP_MS);
-    off += chunk.length;
+}
+
+async function obsCommand(msg, ws) {
+  try {
+    if (msg.action === 'setup') await obsSfx.setup();
+    else if (msg.action === 'test') await sfxPlay(msg.id || sfxEntries()[0]?.id, null);
+    else if (msg.action === 'remove') await obsSfx.remove();
+    else if (msg.action === 'volume') await obsSfx.setVolume(msg.value);
+    else throw new Error('unknown OBS command');
+    ws.send(JSON.stringify({ type: 'obs.ack', action: msg.action, ok: true }));
+  } catch (err) {
+    ws.send(JSON.stringify({ type: 'obs.ack', action: msg.action, ok: false, error: err.message }));
   }
 }
 
@@ -608,12 +560,25 @@ function broadcast(obj) {
   }
 }
 
+let sfxRefreshTimer = null;
+fs.watch(SFX_DIR, () => {
+  clearTimeout(sfxRefreshTimer);
+  sfxRefreshTimer = setTimeout(() => {
+    broadcast(JSON.parse(sfxCatalogFrame()));
+    if (obsClient.state === 'connected') {
+      obsSfx.setup().then(() => console.log('[relay] sound library synchronized with OBS'))
+        .catch((err) => console.log(`[relay] OBS sound sync failed: ${err.message}`));
+    }
+  }, 400);
+});
+
 wss.on('connection', (ws, req) => {
   clients.add(ws);
   console.log(`[relay] device connected (${req.socket.remoteAddress}), ${clients.size} client(s)`);
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify({ type: 'hello', app: 'kast-relay', version: '0.1.0' }));
     ws.send(sfxCatalogFrame());
+    ws.send(JSON.stringify({ type: 'obs.status', status: obsClient.state, detail: obsClient.detail }));
   }
 
   ws.on('message', (data) => {
@@ -655,11 +620,15 @@ wss.on('connection', (ws, req) => {
         break;
       case 'sfx.play':
         /* device tapped a soundboard tile */
-        sfxPlay(msg.id);
+        sfxPlay(msg.id, ws);
         break;
       case 'sfx.audio.req':
-        /* device wants the mp3 for its own speaker (monitor path) */
-        sfxStreamAudio(msg.id, ws);
+        /* retired device-audio path: soundboard output belongs to OBS */
+        ws.send(JSON.stringify({ type: 'sfx.ack', id: sfxWire(msg.id, 20), ok: false,
+                                 error: 'Device SFX audio is retired; use OBS monitoring' }));
+        break;
+      case 'obs.command':
+        obsCommand(msg, ws);
         break;
       case 'sfx.catalog':
         /* device re-requests (e.g. after new files land on the PC) */
@@ -728,6 +697,7 @@ if (SIMULATE) {
 }
 
 console.log(`[relay] KAST relay listening on ws://0.0.0.0:${PORT}`);
+if (process.env.KAST_OBS_ENABLED !== '0') obsClient.start();
 if (KICK_CLIENT_ID && !kickReady()) {
   console.log(`[relay] Kick: authorize once by opening this URL in a browser:`);
   console.log(`[relay]   ${kickAuthUrl()}`);
