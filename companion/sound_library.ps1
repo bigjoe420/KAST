@@ -2,6 +2,12 @@
 [CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
+$script:instanceOwned = $false
+$script:singleInstance = New-Object System.Threading.Mutex($true, 'KASTSoundLibrarySingleInstance', [ref]$script:instanceOwned)
+if (-not $script:instanceOwned) {
+    try { (New-Object -ComObject WScript.Shell).AppActivate('KAST Sound Library') | Out-Null } catch {}
+    exit 0
+}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $relayDir = Resolve-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\relay')
