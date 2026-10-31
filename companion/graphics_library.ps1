@@ -12,7 +12,7 @@ if (-not $script:instanceOwned) {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 $relayDir = Resolve-Path (Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\relay')
-$node = @('C:\Development\node24\current\node.exe', 'node.exe') | Where-Object { $_ -eq 'node.exe' -or (Test-Path $_) } | Select-Object -First 1
+$node = @((Join-Path $PSScriptRoot '..\node24\current\node.exe'), 'C:\Development\node24\current\node.exe', 'node.exe') | Where-Object { $_ -eq 'node.exe' -or (Test-Path $_) } | Select-Object -First 1
 
 function Invoke-GfxCli {
     param([string[]]$Arguments)

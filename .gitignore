@@ -62,3 +62,8 @@ tools_*.txt
 tools_*.py
 tools_bootlog.txt
 buildboot*.txt
+
+# --- Installer staging/output (tool zips, assembled payload, built exe) ---
+installer/.cache/
+installer/payload/
+installer/dist/

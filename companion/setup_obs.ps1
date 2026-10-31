@@ -57,7 +57,7 @@ $listener = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction Sile
 if ($listener) { Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 3
 
-$node = @('C:\Development\node24\current\node.exe', 'node.exe') | Where-Object { $_ -eq 'node.exe' -or (Test-Path $_) } | Select-Object -First 1
+$node = @((Join-Path $PSScriptRoot '..\node24\current\node.exe'), 'C:\Development\node24\current\node.exe', 'node.exe') | Where-Object { $_ -eq 'node.exe' -or (Test-Path $_) } | Select-Object -First 1
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $node
 $psi.Arguments = 'obs_command.js setup'
