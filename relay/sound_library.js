@@ -14,6 +14,10 @@ function safeId(name) {
   return id;
 }
 
+function parseSoundManifest(text) {
+  return JSON.parse(String(text).replace(/^\uFEFF/, ''));
+}
+
 function listSounds(soundsDir) {
   try {
     return fs.readdirSync(soundsDir)
@@ -96,4 +100,4 @@ function removeSound({ id, soundsDir }) {
   return hit;
 }
 
-module.exports = { MAX_SOUNDS, EXTENSIONS, safeId, listSounds, installStarter, importSounds, removeSound };
+module.exports = { MAX_SOUNDS, EXTENSIONS, safeId, listSounds, installStarter, importSounds, removeSound, parseSoundManifest };

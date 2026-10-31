@@ -92,13 +92,18 @@ $replace.Add_Click({
         if ($list.SelectedIndex -lt 0) { throw 'Select the sound button you want to replace first.' }
         $files = Select-AudioFiles $false
         if (-not $files) { return }
+        $id = [string]$list.SelectedItem
+        Invoke-SoundCli @('obs_command.js', 'release', $id) | Out-Null
         $manifest = Join-Path $relayDir 'sound-import.json.tmp'
         try {
             Set-Content -Path $manifest -Value (ConvertTo-Json @($files)) -Encoding UTF8
-            $result = Invoke-SoundCli @('sound_command.js', 'replace', [string]$list.SelectedItem, $manifest)
+            $result = Invoke-SoundCli @('sound_command.js', 'replace', $id, $manifest)
             $status.Text = $result
             Start-Sleep -Milliseconds 700
             Refresh-Sounds
+        } catch {
+            try { Invoke-SoundCli @('obs_command.js', 'setup') | Out-Null } catch {}
+            throw
         } finally { Remove-Item $manifest -Force -ErrorAction SilentlyContinue }
     } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not replace sound', 'OK', 'Warning') | Out-Null }
 })
@@ -113,9 +118,15 @@ $remove.Add_Click({
         $id = [string]$list.SelectedItem
         $answer = [System.Windows.Forms.MessageBox]::Show("Remove '$id' from KAST and OBS? Your original imported file is not changed.", 'Remove sound', 'YesNo', 'Question')
         if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-        $status.Text = Invoke-SoundCli @('sound_command.js', 'remove', $id)
-        Start-Sleep -Milliseconds 700
-        Refresh-Sounds
+        Invoke-SoundCli @('obs_command.js', 'release', $id) | Out-Null
+        try {
+            $status.Text = Invoke-SoundCli @('sound_command.js', 'remove', $id)
+            Start-Sleep -Milliseconds 700
+            Refresh-Sounds
+        } catch {
+            try { Invoke-SoundCli @('obs_command.js', 'setup') | Out-Null } catch {}
+            throw
+        }
     } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Could not remove sound', 'OK', 'Warning') | Out-Null }
 })
 $form.Controls.Add($remove)

@@ -97,6 +97,16 @@ test('cleanup removes only exact KAST-owned inputs and scene', async () => {
   assert(!client.calls.some((c) => c.type === 'RemoveInput' && c.data.inputName === 'My Music'));
 });
 
+test('release detaches only the selected KAST sound before a file change', async () => {
+  const client = new FakeObs();
+  client.inputs = ['KAST SFX - applause', 'KAST SFX - ding', 'My Music'];
+  const sfx = new ObsSfx({ client, listSounds: () => sounds });
+  await sfx.release('ding');
+  assert.deepEqual(client.inputs, ['KAST SFX - applause', 'My Music']);
+  await sfx.release('ding');
+  assert.deepEqual(client.inputs, ['KAST SFX - applause', 'My Music']);
+});
+
 test('missing required OBS capabilities produce a clear setup error', async () => {
   const client = new FakeObs();
   const original = client.request.bind(client);

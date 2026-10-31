@@ -514,6 +514,7 @@ async function obsCommand(msg, ws) {
     if (msg.action === 'setup') await obsSfx.setup();
     else if (msg.action === 'test') await sfxPlay(msg.id || sfxEntries()[0]?.id, null);
     else if (msg.action === 'remove') await obsSfx.remove();
+    else if (msg.action === 'release' && obsClient.state === 'connected') await obsSfx.release(sfxWire(msg.id, 20));
     else if (msg.action === 'volume') await obsSfx.setVolume(msg.value);
     else throw new Error('unknown OBS command');
     ws.send(JSON.stringify({ type: 'obs.ack', action: msg.action, ok: true }));

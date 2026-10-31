@@ -13,7 +13,7 @@ try {
     console.log(JSON.stringify(library.listSounds(soundsDir).map((entry) => entry.id)));
   } else if (action === 'import' || action === 'replace') {
     const manifest = action === 'import' ? first : second;
-    const files = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    const files = library.parseSoundManifest(fs.readFileSync(manifest, 'utf8'));
     const added = library.importSounds({ files, soundsDir, replaceId: action === 'replace' ? first : '' });
     console.log(`Added: ${added.map((entry) => entry.id).join(', ')}`);
   } else if (action === 'remove') {

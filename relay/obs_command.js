@@ -8,8 +8,8 @@ const WebSocket = require('ws');
 const action = process.argv[2];
 const value = process.argv[3];
 const port = Number(process.env.KAST_RELAY_PORT || 8765);
-if (!['setup', 'test', 'remove', 'volume'].includes(action)) {
-  console.error('Usage: node obs_command.js <setup|test|remove|volume> [value]');
+if (!['setup', 'test', 'remove', 'release', 'volume'].includes(action)) {
+  console.error('Usage: node obs_command.js <setup|test|remove|release|volume> [value]');
   process.exit(2);
 }
 
@@ -21,7 +21,8 @@ const timer = setTimeout(() => {
 }, 15000);
 
 ws.on('open', () => {
-  ws.send(JSON.stringify({ type: 'obs.command', action, ...(value !== undefined ? { value: Number(value) } : {}) }));
+  const argument = value === undefined ? {} : (action === 'release' ? { id: value } : { value: Number(value) });
+  ws.send(JSON.stringify({ type: 'obs.command', action, ...argument }));
 });
 ws.on('message', (raw) => {
   let msg;

@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { safeId, listSounds, installStarter, importSounds, removeSound } = require('./sound_library');
+const { safeId, listSounds, installStarter, importSounds, removeSound, parseSoundManifest } = require('./sound_library');
 
 function fixture(t) {
   const root = path.join(__dirname, `test-output-${process.pid}-${Math.random().toString(16).slice(2)}.tmp`);
@@ -25,6 +25,10 @@ function audio(dir, name, contents = 'sound') {
 test('safeId produces bounded wire-safe labels', () => {
   assert.equal(safeId('  My: Sound, Really Long Name.mp3 '), 'My Sound Really Long');
   assert.throws(() => safeId(':::'), /name/i);
+});
+
+test('sound manifests accept Windows PowerShell UTF-8 BOM', () => {
+  assert.deepEqual(parseSoundManifest('\uFEFF["KAST Bench One.mp3"]'), ['KAST Bench One.mp3']);
 });
 
 test('starter installation fills missing sounds without overwriting user audio', (t) => {

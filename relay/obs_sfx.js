@@ -110,6 +110,14 @@ class ObsSfx {
     }
   }
 
+  async release(id) {
+    const inputName = sourceName(id);
+    const inputs = await this.client.request('GetInputList');
+    if (inputs.inputs.some((input) => input.inputName === inputName)) {
+      await this.client.request('RemoveInput', { inputName });
+    }
+  }
+
   async remove() {
     const inputs = await this.client.request('GetInputList');
     for (const input of inputs.inputs) {
