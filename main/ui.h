@@ -38,6 +38,7 @@ typedef enum {
     KAST_SCREEN_CHAT,
     KAST_SCREEN_SCENES,
     KAST_SCREEN_SFX,
+    KAST_SCREEN_GFX,
     KAST_SCREEN_SETTINGS,
     KAST_SCREEN_COUNT
 } kast_screen_t;
@@ -84,6 +85,8 @@ void kast_scenes_load(lv_obj_t *parent);
 void kast_scenes_unload(void);
 void kast_sfx_load(lv_obj_t *parent);
 void kast_sfx_unload(void);
+void kast_gfx_load(lv_obj_t *parent);
+void kast_gfx_unload(void);
 void kast_settings_load(lv_obj_t *parent);
 void kast_settings_unload(void);
 

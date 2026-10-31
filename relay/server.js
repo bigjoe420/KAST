@@ -447,9 +447,14 @@ function synthEmote(code) {
 
 const SFX_DIR = path.join(__dirname, 'sounds');
 const STARTER_SFX_DIR = path.join(__dirname, 'starter_sounds');
+const GFX_DIR = path.join(__dirname, 'graphics');
+const SCENE_TILES_PATH = path.join(__dirname, 'scene_tiles.json');
 const { ObsClient } = require('./obs');
 const { ObsSfx } = require('./obs_sfx');
+const { ObsGfx } = require('./obs_gfx');
+const { ObsScenes } = require('./obs_scenes');
 const soundLibrary = require('./sound_library');
+const gfxLibrary = require('./gfx_library');
 
 try {
   const installed = soundLibrary.installStarter({ starterDir: STARTER_SFX_DIR, soundsDir: SFX_DIR });
@@ -481,6 +486,17 @@ function sfxEntries() {
   return soundLibrary.listSounds(SFX_DIR).slice(0, soundLibrary.MAX_SOUNDS);
 }
 
+/* --- Motion graphics catalog (overlay mode) + scene tiles ------------- */
+
+function gfxEntries() {
+  return gfxLibrary.listGraphics(GFX_DIR).slice(0, gfxLibrary.MAX_GRAPHICS);
+}
+
+function gfxCatalogFrame() {
+  const items = gfxEntries().map((entry) => `${sfxWire(entry.id, 20)}:${sfxWire(entry.id, 12)}`);
+  return JSON.stringify({ type: 'gfx.catalog', items: items.join(',') });
+}
+
 const obsClient = new ObsClient({
   url: process.env.KAST_OBS_URL || 'ws://127.0.0.1:4455',
   password: process.env.KAST_OBS_PASSWORD || '',
@@ -489,9 +505,42 @@ const obsSfx = new ObsSfx({
   client: obsClient, listSounds: sfxEntries,
   volume: Number(process.env.KAST_SFX_VOLUME || 1),
 });
+const obsGfx = new ObsGfx({
+  client: obsClient, listGraphics: gfxEntries,
+  bindingFor: (id) => gfxLibrary.bindingFor(GFX_DIR, id),
+});
+const obsScenes = new ObsScenes({ client: obsClient, selectionPath: SCENE_TILES_PATH });
+
+/* Box scene tiles: pushed on connect, on OBS scene changes, and after
+   every switch. Best-effort — OBS down means an empty catalog, and the
+   device keeps showing its last known tiles until a fresh one lands. */
+async function pushScenesCatalog(target) {
+  if (obsClient.state !== 'connected') return;
+  try {
+    const { scenes, current } = await obsScenes.catalog();
+    const frame = JSON.stringify({
+      type: 'scenes.catalog',
+      scenes: scenes.map((name) => sfxWire(name, 24)).join(','),
+      current: sfxWire(current, 24),
+    });
+    if (target) target.send(frame); else broadcast(JSON.parse(frame));
+  } catch (err) {
+    console.log(`[relay] scenes catalog failed: ${err.message}`);
+  }
+}
+
+obsClient.on('event', ({ eventType }) => {
+  if (eventType !== 'CurrentProgramSceneChanged') return;
+  /* The overlay scenes must follow the user to the newly active scene. */
+  obsSfx.linkActiveScene().catch((err) => console.log(`[obs] sfx relink failed: ${err.message}`));
+  obsGfx.linkActiveScene().catch((err) => console.log(`[obs] gfx relink failed: ${err.message}`));
+  pushScenesCatalog();
+});
+
 obsClient.on('state', (state) => {
   console.log(`[obs] ${state.status}${state.detail ? ` — ${state.detail}` : ''}`);
   broadcast({ type: 'obs.status', status: state.status, detail: state.detail });
+  if (state.status === 'connected') pushScenesCatalog();
 });
 
 async function sfxPlay(id, ws) {
@@ -509,12 +558,48 @@ async function sfxPlay(id, ws) {
   }
 }
 
+/* One KAST action: overlay graphic plus its optional synchronized sound. */
+async function gfxPlay(id, ws) {
+  const safe = sfxWire(id, 20);
+  try {
+    const gfx = await obsGfx.play(safe);
+    console.log(`[relay] gfx.play '${path.basename(gfx.file)}' via OBS overlay`);
+    const ack = { type: 'gfx.ack', id: safe, ok: true };
+    if (ws) ws.send(JSON.stringify(ack)); else broadcast(ack);
+    const { sound } = gfxLibrary.bindingFor(GFX_DIR, gfx.id);
+    if (sound) await sfxPlay(sound, null);
+    return true;
+  } catch (err) {
+    console.log(`[relay] gfx.play '${id}' failed: ${err.message}`);
+    const ack = { type: 'gfx.ack', id: safe, ok: false, error: err.message.slice(0, 120) };
+    if (ws) ws.send(JSON.stringify(ack)); else broadcast(ack);
+    return false;
+  }
+}
+
+async function sceneSwitch(name, ws) {
+  const safe = sfxWire(name, 24);
+  try {
+    await obsScenes.switchTo(safe);
+    console.log(`[relay] scene.switch -> '${safe}'`);
+    if (ws) ws.send(JSON.stringify({ type: 'scene.ack', name: safe, ok: true }));
+    await pushScenesCatalog();
+    return true;
+  } catch (err) {
+    console.log(`[relay] scene.switch '${name}' failed: ${err.message}`);
+    if (ws) ws.send(JSON.stringify({ type: 'scene.ack', name: safe, ok: false, error: err.message.slice(0, 120) }));
+    return false;
+  }
+}
+
 async function obsCommand(msg, ws) {
   try {
-    if (msg.action === 'setup') await obsSfx.setup();
+    if (msg.action === 'setup') { await obsSfx.setup(); await obsGfx.setup(); }
     else if (msg.action === 'test') await sfxPlay(msg.id || sfxEntries()[0]?.id, null);
-    else if (msg.action === 'remove') await obsSfx.remove();
+    else if (msg.action === 'remove') { await obsSfx.remove(); await obsGfx.remove(); }
     else if (msg.action === 'release' && obsClient.state === 'connected') await obsSfx.release(sfxWire(msg.id, 20));
+    else if (msg.action === 'gfxrelease' && obsClient.state === 'connected') await obsGfx.release(sfxWire(msg.id, 20));
+    else if (msg.action === 'gfxplay') await gfxPlay(msg.id || gfxEntries()[0]?.id, null);
     else if (msg.action === 'volume') await obsSfx.setVolume(msg.value);
     else throw new Error('unknown OBS command');
     ws.send(JSON.stringify({ type: 'obs.ack', action: msg.action, ok: true }));
@@ -573,13 +658,28 @@ fs.watch(SFX_DIR, () => {
   }, 400);
 });
 
+fs.mkdirSync(GFX_DIR, { recursive: true });
+let gfxRefreshTimer = null;
+fs.watch(GFX_DIR, () => {
+  clearTimeout(gfxRefreshTimer);
+  gfxRefreshTimer = setTimeout(() => {
+    broadcast(JSON.parse(gfxCatalogFrame()));
+    if (obsClient.state === 'connected') {
+      obsGfx.setup().then(() => console.log('[relay] graphics library synchronized with OBS'))
+        .catch((err) => console.log(`[relay] OBS graphics sync failed: ${err.message}`));
+    }
+  }, 400);
+});
+
 wss.on('connection', (ws, req) => {
   clients.add(ws);
   console.log(`[relay] device connected (${req.socket.remoteAddress}), ${clients.size} client(s)`);
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify({ type: 'hello', app: 'kast-relay', version: '0.1.0' }));
     ws.send(sfxCatalogFrame());
+    ws.send(gfxCatalogFrame());
     ws.send(JSON.stringify({ type: 'obs.status', status: obsClient.state, detail: obsClient.detail }));
+    pushScenesCatalog(ws);
   }
 
   ws.on('message', (data) => {
@@ -634,6 +734,40 @@ wss.on('connection', (ws, req) => {
       case 'sfx.catalog':
         /* device re-requests (e.g. after new files land on the PC) */
         ws.send(sfxCatalogFrame());
+        break;
+      case 'gfx.catalog':
+        ws.send(gfxCatalogFrame());
+        break;
+      case 'gfx.play':
+        /* device tapped a motion-graphics tile */
+        gfxPlay(msg.id, ws);
+        break;
+      case 'scene.switch':
+        /* device tapped a scene tile */
+        sceneSwitch(String(msg.name || ''), ws);
+        break;
+      case 'scenes.list.req':
+        /* Companion scene picker: every user scene + current selection */
+        (async () => {
+          try {
+            if (obsClient.state !== 'connected') throw new Error('OBS is not connected');
+            ws.send(JSON.stringify({
+              type: 'scenes.list',
+              scenes: await obsScenes.listUserScenes(),
+              selected: obsScenes.readSelection(),
+            }));
+          } catch (err) {
+            ws.send(JSON.stringify({ type: 'scenes.list', ok: false, error: err.message }));
+          }
+        })();
+        break;
+      case 'scenes.refresh':
+        /* Companion rewrote scene_tiles.json — rebroadcast the tiles */
+        pushScenesCatalog().then(() => {
+          ws.send(JSON.stringify({ type: 'scenes.refreshed' }));
+        }).catch((err) => {
+          ws.send(JSON.stringify({ type: 'scenes.refreshed', ok: false, error: err.message }));
+        });
         break;
       case 'emote.req':
         /* device wants an emote tile — synthesize in simulate; with Kick

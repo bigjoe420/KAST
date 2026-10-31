@@ -86,6 +86,7 @@ static const kast_screen_def_t s_screens[KAST_SCREEN_COUNT] = {
     [KAST_SCREEN_CHAT]     = {kast_chat_load, kast_chat_unload},
     [KAST_SCREEN_SCENES]   = {kast_scenes_load, kast_scenes_unload},
     [KAST_SCREEN_SFX]      = {kast_sfx_load, kast_sfx_unload},
+    [KAST_SCREEN_GFX]      = {kast_gfx_load, kast_gfx_unload},
     [KAST_SCREEN_SETTINGS] = {kast_settings_load, kast_settings_unload},
 };
 
@@ -93,17 +94,10 @@ static int s_current = -1;         /* no screen loaded yet */
 
 static void home_btn_cb(lv_event_t *e)
 {
-    /* The button sits inside the status bar, which has its own CLICKED
-     * handler (jump to Settings). Without this the event bubbles up and
-     * the bar handler runs after ours, overriding HOME with Settings. */
+    /* The button sits inside the status bar; keep the tap from bubbling
+     * into whatever the bar grows in future. */
     lv_event_stop_bubbling(e);
     kast_ui_show(KAST_SCREEN_HOME);
-}
-
-static void bar_cb(lv_event_t *e)
-{
-    (void)e;
-    kast_ui_show(KAST_SCREEN_SETTINGS);
 }
 
 void kast_ui_show(kast_screen_t screen)
@@ -138,8 +132,10 @@ static void build_chrome(lv_obj_t *scr)
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_set_scrollable(bar, false);
-    /* Tap the status bar to reach the connection settings page */
-    lv_obj_add_event_cb(bar, bar_cb, LV_EVENT_CLICKED, NULL);
+    /* The status bar is display-only: it used to double as a settings
+     * shortcut, but two different-looking controls landing on the same
+     * page read as a bug (owner call 2026-10-31). SETTINGS lives on the
+     * Home screen. */
 
     lv_obj_t *brand = lv_label_create(bar);
     lv_label_set_text(brand, "KAST");

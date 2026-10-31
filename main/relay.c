@@ -101,6 +101,23 @@ static uint32_t s_sfx_version;
 static StaticSemaphore_t s_sfx_mtx_buf;
 static SemaphoreHandle_t s_sfx_mtx;
 
+/* Motion-graphics catalog: identical wire shape, its own slots (Phase 4).
+ * Shares s_sfx_mtx — both stores are written only from the ws handler and
+ * read only from the LVGL task, and the critical sections are tiny. */
+static char     s_gfx_id[KAST_GFX_MAX][KAST_SFX_ID_LEN];
+static char     s_gfx_name[KAST_GFX_MAX][KAST_SFX_NAME_LEN];
+static uint32_t s_gfx_count;
+static uint32_t s_gfx_version;
+
+/* Scene tile catalog (Phase 4): user scenes chosen in the Companion app,
+ * plus the live program scene for the active-tile highlight. */
+static char     s_scene_name[KAST_SCENES_MAX][KAST_SCENE_NAME_LEN];
+static char     s_scene_current[KAST_SCENE_NAME_LEN];
+static uint32_t s_scene_count;
+static uint32_t s_scene_version;
+static StaticSemaphore_t s_scene_mtx_buf;
+static SemaphoreHandle_t s_scene_mtx;
+
 /* Parse one "id:Name" pair into slot idx. Returns false when the pair
  * has no id. Never writes outside the fixed slot buffers. */
 static bool sfx_pair_store(uint32_t idx, const char *pair, size_t len)
@@ -141,6 +158,54 @@ static void sfx_catalog_store(const char *sounds)
         sounds = comma ? comma + 1 : NULL;
     }
     s_sfx_version++;
+}
+
+/* Same pair shape ("id:Name,...") into the graphics slots. */
+static void gfx_catalog_store(const char *items)
+{
+    s_gfx_count = 0;
+    while (s_gfx_count < KAST_GFX_MAX && items != NULL && items[0] != '\0') {
+        const char *comma = strchr(items, ',');
+        size_t len = comma ? (size_t)(comma - items) : strlen(items);
+        const char *colon = memchr(items, ':', len);
+        size_t id_len = colon ? (size_t)(colon - items) : len;
+        if (id_len > 0) {
+            if (id_len >= KAST_SFX_ID_LEN) id_len = KAST_SFX_ID_LEN - 1;
+            memcpy(s_gfx_id[s_gfx_count], items, id_len);
+            s_gfx_id[s_gfx_count][id_len] = '\0';
+            size_t name_len = 0;
+            if (colon && (size_t)(colon - items) + 1 < len) {
+                name_len = len - ((size_t)(colon - items) + 1);
+                if (name_len >= KAST_SFX_NAME_LEN) name_len = KAST_SFX_NAME_LEN - 1;
+                memcpy(s_gfx_name[s_gfx_count], colon + 1, name_len);
+            }
+            s_gfx_name[s_gfx_count][name_len] = '\0';
+            s_gfx_count++;
+        }
+        items = comma ? comma + 1 : NULL;
+    }
+    s_gfx_version++;
+}
+
+/* Scene tiles: plain comma-separated names (no id:Name pair), plus the
+ * current program scene name carried in its own field. */
+static void scenes_catalog_store(const char *scenes, const char *current)
+{
+    s_scene_count = 0;
+    while (s_scene_count < KAST_SCENES_MAX && scenes != NULL && scenes[0] != '\0') {
+        const char *comma = strchr(scenes, ',');
+        size_t len = comma ? (size_t)(comma - scenes) : strlen(scenes);
+        if (len > 0) {
+            if (len >= KAST_SCENE_NAME_LEN) len = KAST_SCENE_NAME_LEN - 1;
+            memcpy(s_scene_name[s_scene_count], scenes, len);
+            s_scene_name[s_scene_count][len] = '\0';
+            s_scene_count++;
+        }
+        scenes = comma ? comma + 1 : NULL;
+    }
+    snprintf(s_scene_current, sizeof(s_scene_current), "%s",
+             current != NULL ? current : "");
+    s_scene_version++;
 }
 
 static void chat_ring_push(const char *id, const char *user, const char *text,
@@ -501,6 +566,121 @@ esp_err_t kast_relay_sfx_audio_req(const char *id)
     json_escape(id, esc, sizeof(esc));
     const int n = snprintf(frame, sizeof(frame),
                            "{\"type\":\"sfx.audio.req\",\"id\":\"%s\"}", esc);
+    if (n < 0 || n >= (int)sizeof(frame)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const int sent = esp_websocket_client_send_text(s_client, frame,
+                                                    (int)strlen(frame),
+                                                    pdMS_TO_TICKS(2000));
+    return sent >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion graphics + scene tiles (Phase 4)                             */
+/* ------------------------------------------------------------------ */
+
+uint32_t kast_relay_gfx_count(void)
+{
+    return s_gfx_count;
+}
+
+bool kast_relay_gfx_get(uint32_t idx, char *id, size_t id_len,
+                        char *name, size_t name_len)
+{
+    if (s_sfx_mtx == NULL || idx >= s_gfx_count) {
+        return false;
+    }
+    if (xSemaphoreTake(s_sfx_mtx, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    if (idx < s_gfx_count) {
+        if (id != NULL && id_len > 0) {
+            snprintf(id, id_len, "%s", s_gfx_id[idx]);
+        }
+        if (name != NULL && name_len > 0) {
+            snprintf(name, name_len, "%s", s_gfx_name[idx]);
+        }
+        xSemaphoreGive(s_sfx_mtx);
+        return true;
+    }
+    xSemaphoreGive(s_sfx_mtx);
+    return false;
+}
+
+uint32_t kast_relay_gfx_version(void)
+{
+    return s_gfx_version;
+}
+
+esp_err_t kast_relay_gfx_play(const char *id)
+{
+    if (s_client == NULL || !s_link_up || id == NULL || id[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char esc[KAST_SFX_ID_LEN];
+    char frame[96];
+    json_escape(id, esc, sizeof(esc));
+    const int n = snprintf(frame, sizeof(frame),
+                           "{\"type\":\"gfx.play\",\"id\":\"%s\"}", esc);
+    if (n < 0 || n >= (int)sizeof(frame)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const int sent = esp_websocket_client_send_text(s_client, frame,
+                                                    (int)strlen(frame),
+                                                    pdMS_TO_TICKS(2000));
+    return sent >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+uint32_t kast_relay_scenes_count(void)
+{
+    return s_scene_count;
+}
+
+bool kast_relay_scenes_get(uint32_t idx, char *name, size_t name_len)
+{
+    if (s_scene_mtx == NULL || idx >= s_scene_count) {
+        return false;
+    }
+    if (xSemaphoreTake(s_scene_mtx, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    if (idx < s_scene_count && name != NULL && name_len > 0) {
+        snprintf(name, name_len, "%s", s_scene_name[idx]);
+        xSemaphoreGive(s_scene_mtx);
+        return true;
+    }
+    xSemaphoreGive(s_scene_mtx);
+    return false;
+}
+
+uint32_t kast_relay_scenes_version(void)
+{
+    return s_scene_version;
+}
+
+bool kast_relay_scenes_current(char *name, size_t name_len)
+{
+    if (s_scene_mtx == NULL || name == NULL || name_len == 0) {
+        return false;
+    }
+    if (xSemaphoreTake(s_scene_mtx, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    snprintf(name, name_len, "%s", s_scene_current);
+    xSemaphoreGive(s_scene_mtx);
+    return true;
+}
+
+esp_err_t kast_relay_scene_switch(const char *name)
+{
+    if (s_client == NULL || !s_link_up || name == NULL || name[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char esc[KAST_SCENE_NAME_LEN * 2];
+    char frame[128];
+    json_escape(name, esc, sizeof(esc));
+    const int n = snprintf(frame, sizeof(frame),
+                           "{\"type\":\"scene.switch\",\"name\":\"%s\"}", esc);
     if (n < 0 || n >= (int)sizeof(frame)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -911,6 +1091,27 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
                 sfx_catalog_store(sounds);
                 xSemaphoreGive(s_sfx_mtx);
             } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "gfx.catalog") == 0) {
+                /* motion-graphics catalog — same "id:Name" pair shape */
+                char items[480] = "";
+                json_get_string(frame, "items", items, sizeof(items));
+                strip_char(items, '#');
+                xSemaphoreTake(s_sfx_mtx, portMAX_DELAY);
+                gfx_catalog_store(items);
+                xSemaphoreGive(s_sfx_mtx);
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "scenes.catalog") == 0) {
+                /* user scene tiles + the live program scene */
+                char scenes[360] = "";
+                char current[KAST_SCENE_NAME_LEN] = "";
+                json_get_string(frame, "scenes", scenes, sizeof(scenes));
+                json_get_string(frame, "current", current, sizeof(current));
+                strip_char(scenes, '#');
+                strip_char(current, '#');
+                xSemaphoreTake(s_scene_mtx, portMAX_DELAY);
+                scenes_catalog_store(scenes, current);
+                xSemaphoreGive(s_scene_mtx);
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
                        strcmp(type, "obs.status") == 0) {
                 char status[20] = "";
                 json_get_string(frame, "status", status, sizeof(status));
@@ -921,6 +1122,12 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
                        strcmp(type, "sfx.ack") == 0) {
                 /* A failed trigger is visible even when the transport and
                    OBS socket are healthy (missing media, rejected request). */
+                if (strstr(frame, "\"ok\":false") != NULL) {
+                    kast_ui_link_status(KAST_LINK_OBS, false, "FAIL");
+                }
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       (strcmp(type, "gfx.ack") == 0 || strcmp(type, "scene.ack") == 0)) {
+                /* same failure visibility for graphics and scene switches */
                 if (strstr(frame, "\"ok\":false") != NULL) {
                     kast_ui_link_status(KAST_LINK_OBS, false, "FAIL");
                 }
@@ -1008,6 +1215,7 @@ esp_err_t kast_relay_init(void)
 {
     s_chat_mtx = xSemaphoreCreateMutexStatic(&s_chat_mtx_buf);
     s_sfx_mtx = xSemaphoreCreateMutexStatic(&s_sfx_mtx_buf);
+    s_scene_mtx = xSemaphoreCreateMutexStatic(&s_scene_mtx_buf);
 
     ESP_RETURN_ON_ERROR(relay_load_endpoint(), TAG, "endpoint load failed");
 

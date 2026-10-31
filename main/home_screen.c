@@ -3,7 +3,7 @@
  *
  * Layout (in the 480x436 content area below the status bar):
  *   [title]      KICK AUXILIARY / STREAMING TERMINAL over a breathing bar
- *   [modules]    CHAT / SCENES / SFX — large rounded buttons, green keyline,
+ *   [modules]    CHAT / SCENES / SFX / GFX — large rounded buttons, green keyline,
  *                green fill + dark text while pressed; navigate via router
  *   [towers]     Kick-'K' double-helix towers on the screen edges —
  *                float-math pseudo-3D, two-pass z-sort, flat Kick lime,
@@ -75,7 +75,7 @@ static void settings_btn_cb(lv_event_t *e)
 static lv_obj_t *module_button(lv_obj_t *parent, const char *name, kast_screen_t screen)
 {
     lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_size(btn, 290, 68);
+    lv_obj_set_size(btn, 290, 54);
     lv_obj_set_style_radius(btn, 14, 0);
     lv_obj_set_style_bg_color(btn, KAST_COLOR_CARD, 0);
     lv_obj_set_style_border_color(btn, KAST_COLOR_GREEN_DIM, 0);
@@ -89,7 +89,7 @@ static lv_obj_t *module_button(lv_obj_t *parent, const char *name, kast_screen_t
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, name);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(label, KAST_COLOR_TEXT, 0);
     lv_obj_set_style_text_color(label, KAST_COLOR_BG, LV_STATE_PRESSED);
     lv_obj_center(label);
@@ -414,13 +414,14 @@ void kast_home_load(lv_obj_t *parent)
     lv_anim_set_exec_cb(&glow, glow_opa_cb);
     lv_anim_start(&glow);
 
-    /* Module buttons — column ends at 340, clear of the EQ strip (352+) */
+    /* Module buttons — four entries (CHAT/SCENES/SFX/GFX); the column
+     * must end clear of the EQ strip (352+) */
     lv_obj_t *menu = lv_obj_create(parent);
-    lv_obj_set_size(menu, 320, 3 * 68 + 2 * 14);
-    lv_obj_align(menu, LV_ALIGN_TOP_MID, 0, 108);
+    lv_obj_set_size(menu, 320, 4 * 54 + 3 * 10);
+    lv_obj_align(menu, LV_ALIGN_TOP_MID, 0, 100);
     lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(menu, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(menu, 14, 0);
+    lv_obj_set_style_pad_row(menu, 10, 0);
     lv_obj_set_style_bg_opa(menu, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(menu, 0, 0);
     lv_obj_set_scrollable(menu, false);
@@ -428,6 +429,7 @@ void kast_home_load(lv_obj_t *parent)
     module_button(menu, "CHAT", KAST_SCREEN_CHAT);
     module_button(menu, "SCENES", KAST_SCREEN_SCENES);
     module_button(menu, "SFX", KAST_SCREEN_SFX);
+    module_button(menu, "GFX", KAST_SCREEN_GFX);
 
     /* Kick-'K' helix towers on the screen edges, clear of the buttons */
     build_tower(parent, LV_ALIGN_CENTER, -216, 0);

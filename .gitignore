@@ -52,6 +52,8 @@ tools/audit_capture.txt
 
 # --- Personal content (never versioned) ---
 relay/sounds/
+relay/graphics/
+relay/scene_tiles.json
 scratch/
 session/
 .cache/

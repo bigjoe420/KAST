@@ -10,8 +10,11 @@ function authentication(password, challenge, salt) {
 }
 
 class ObsClient extends EventEmitter {
+  /* eventSubscriptions: obs-websocket v5 bitmask. KAST needs the Scenes
+     category (1 << 2) so CurrentProgramSceneChanged keeps the box's active
+     tile and the KAST overlay scenes' nesting in sync. */
   constructor({ url = 'ws://127.0.0.1:4455', password = '', requestTimeoutMs = 5000,
-                reconnect = true, reconnectDelayMs = 3000 } = {}) {
+                reconnect = true, reconnectDelayMs = 3000, eventSubscriptions = (1 << 2) } = {}) {
     super();
     this.url = url;
     this.password = password;
@@ -29,6 +32,7 @@ class ObsClient extends EventEmitter {
     this.auto = false;
     this.closing = false;
     this.blockReconnect = false;
+    this.eventSubscriptions = eventSubscriptions;
   }
 
   setState(state, detail = '') {
@@ -70,7 +74,7 @@ class ObsClient extends EventEmitter {
             return;
           }
           ws.send(JSON.stringify({ op: 1, d: {
-            rpcVersion: 1, eventSubscriptions: 0,
+            rpcVersion: 1, eventSubscriptions: this.eventSubscriptions,
             ...(auth ? { authentication: authentication(this.password, auth.challenge, auth.salt) } : {}),
           } }));
         } else if (msg.op === 2) {
@@ -80,6 +84,12 @@ class ObsClient extends EventEmitter {
           this.connectReject = null;
           if (done) done();
           resolve();
+        } else if (msg.op === 5) {
+          /* OBS event (we subscribe to the Scenes category only) */
+          this.emit('event', {
+            eventType: msg.d && msg.d.eventType,
+            eventData: (msg.d && msg.d.eventData) || {},
+          });
         } else if (msg.op === 7) {
           const pending = this.pending.get(msg.d.requestId);
           if (!pending) return;

@@ -119,6 +119,43 @@ esp_err_t kast_relay_sfx_play(const char *id);
  * alongside kast_relay_sfx_play() — same rules. */
 esp_err_t kast_relay_sfx_audio_req(const char *id);
 
+/* ------------------------------------------------------------------ */
+/* Motion graphics (Phase 4, overlay mode)                             */
+/* ------------------------------------------------------------------ */
+/* Same wire shape as the soundboard: the relay pushes
+ * {"type":"gfx.catalog","items":"id:Name,..."} on connect and on every
+ * library change; a tap sends {"type":"gfx.play","id"} and the relay
+ * overlays the clip on the live OBS scene (plus its bound sound, if any).
+ * Reuses the KAST_SFX id/name wire lengths. */
+
+#define KAST_GFX_MAX 12
+
+uint32_t kast_relay_gfx_count(void);
+bool kast_relay_gfx_get(uint32_t idx, char *id, size_t id_len,
+                        char *name, size_t name_len);
+uint32_t kast_relay_gfx_version(void);
+esp_err_t kast_relay_gfx_play(const char *id);
+
+/* ------------------------------------------------------------------ */
+/* Scene controller (Phase 4)                                          */
+/* ------------------------------------------------------------------ */
+/* The relay pushes {"type":"scenes.catalog","scenes":"Name,...",
+ * "current":"Name"} on connect and on every OBS program-scene change.
+ * Scenes are user-owned and selected in the Companion app; the device
+ * only displays and switches — never creates, renames, or deletes. */
+
+#define KAST_SCENES_MAX      12
+#define KAST_SCENE_NAME_LEN  25   /* wire names are <= 24 chars */
+
+uint32_t kast_relay_scenes_count(void);
+bool kast_relay_scenes_get(uint32_t idx, char *name, size_t name_len);
+uint32_t kast_relay_scenes_version(void);
+bool kast_relay_scenes_current(char *name, size_t name_len);
+
+/* Switch the OBS program scene: {"type":"scene.switch","name"}.
+ * Safe from the LVGL task; blocks up to 2 s on the socket. */
+esp_err_t kast_relay_scene_switch(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

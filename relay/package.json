@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "start:sim": "node server.js --simulate-chat",
-    "test": "node --test obs.test.js obs_sfx.test.js sound_library.test.js && node smoke.js"
+    "test": "node --test obs.test.js obs_sfx.test.js obs_gfx.test.js obs_scenes.test.js sound_library.test.js gfx_library.test.js && node smoke.js"
   },
   "engines": {
     "node": ">=18"

@@ -118,7 +118,7 @@ function Show-ObsSetup {
     $label = New-Object System.Windows.Forms.Label
     $label.Location = New-Object System.Drawing.Point(18, 16)
     $label.Size = New-Object System.Drawing.Size(490, 105)
-    $label.Text = "In OBS: Tools > WebSocket Server Settings.`r`nEnable the server, keep port 4455, then enter its password below.`r`nLeave the password blank only if OBS authentication is disabled.`r`n`r`nKAST adds only its own SFX scene and sources. Your scenes stay untouched."
+    $label.Text = "In OBS: Tools > WebSocket Server Settings.`r`nEnable the server, keep port 4455, then enter its password below.`r`nLeave the password blank only if OBS authentication is disabled.`r`n`r`nKAST adds only its own SFX/GFX scenes and sources. Your scenes stay untouched."
     $form.Controls.Add($label)
     $pwLabel = New-Object System.Windows.Forms.Label
     $pwLabel.Text = 'OBS WebSocket password'
@@ -198,11 +198,13 @@ $miObsStatus.Enabled = $false
 $miObsSetup = $menu.Items.Add('Setup OBS...')
 $miObsTest = $menu.Items.Add('Test OBS sound')
 $miSoundLibrary = $menu.Items.Add('Sound Library...')
+$miGfxLibrary = $menu.Items.Add('Graphics Library...')
+$miSceneTiles = $menu.Items.Add('Scene Tiles...')
 $miObsVolume = $menu.Items.Add('SFX volume')
 $miObsVol50 = $miObsVolume.DropDownItems.Add('50%')
 $miObsVol100 = $miObsVolume.DropDownItems.Add('100%')
 $miObsVol150 = $miObsVolume.DropDownItems.Add('150%')
-$miObsRemove = $menu.Items.Add('Remove KAST SFX Setup')
+$miObsRemove = $menu.Items.Add('Remove KAST OBS Setup')
 $menu.Items.Add('-') | Out-Null
 $miQuit = $menu.Items.Add('Quit')
 $icon.ContextMenuStrip = $menu
@@ -238,6 +240,14 @@ $miSoundLibrary.Add_Click({
     $scriptPath = Join-Path $companionDir 'sound_library.ps1'
     Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
 })
+$miGfxLibrary.Add_Click({
+    $scriptPath = Join-Path $companionDir 'graphics_library.ps1'
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
+})
+$miSceneTiles.Add_Click({
+    $scriptPath = Join-Path $companionDir 'scene_tiles.ps1'
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
+})
 $miObsTest.Add_Click({
     try { & $balloon 'KAST OBS' (Invoke-ObsCommand 'test') 'Info' }
     catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'KAST OBS test failed', 'OK', 'Warning') | Out-Null }
@@ -247,8 +257,8 @@ $miObsVol100.Add_Click({ try { Invoke-ObsCommand 'volume' '1' | Out-Null } catch
 $miObsVol150.Add_Click({ try { Invoke-ObsCommand 'volume' '1.5' | Out-Null } catch { & $balloon 'KAST OBS' $_.Exception.Message 'Warning' } })
 $miObsRemove.Add_Click({
     $answer = [System.Windows.Forms.MessageBox]::Show(
-        'Remove only the KAST SFX scene and KAST SFX sources from OBS?',
-        'Remove KAST SFX Setup', 'YesNo', 'Question')
+        'Remove only the KAST scenes and KAST sources (SFX + GFX) from OBS?',
+        'Remove KAST OBS Setup', 'YesNo', 'Question')
     if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
         try { & $balloon 'KAST OBS' (Invoke-ObsCommand 'remove') 'Info' }
         catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'KAST OBS cleanup failed', 'OK', 'Warning') | Out-Null }
