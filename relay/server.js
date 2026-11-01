@@ -482,8 +482,11 @@ function sfxCatalogFrame() {
   return JSON.stringify({ type: 'sfx.catalog', sounds: sounds.join(',') });
 }
 
+/* OBS-facing catalog: EVERY sound file gets a KAST SFX source, because
+   graphics can bind sounds that are not among the box's 12 SFX tiles.
+   The 12-slot cap only applies to the tile catalog (sfxCatalogIds). */
 function sfxEntries() {
-  return soundLibrary.listSounds(SFX_DIR).slice(0, soundLibrary.MAX_SOUNDS);
+  return soundLibrary.listSounds(SFX_DIR);
 }
 
 /* --- Motion graphics catalog (overlay mode) + scene tiles ------------- */
