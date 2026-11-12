@@ -109,6 +109,12 @@ static char     s_gfx_name[KAST_GFX_MAX][KAST_SFX_NAME_LEN];
 static uint32_t s_gfx_count;
 static uint32_t s_gfx_version;
 
+/* PANIC state mirror (owner-approved 2026-11-01): written from the ws
+ * handler on {"type":"panic.status"}, read from the LVGL task — single
+ * writer / single reader of a word, same discipline as s_obs_fail. */
+static bool     s_panic_on;
+static uint32_t s_panic_version;
+
 /* Scene tile catalog (Phase 4): user scenes chosen in the Companion app,
  * plus the live program scene for the active-tile highlight. */
 static char     s_scene_name[KAST_SCENES_MAX][KAST_SCENE_NAME_LEN];
@@ -631,6 +637,40 @@ esp_err_t kast_relay_gfx_play(const char *id)
     return sent >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t kast_relay_gfx_clear(void)
+{
+    if (s_client == NULL || !s_link_up) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    static const char frame[] = "{\"type\":\"gfx.clear\"}";
+    const int sent = esp_websocket_client_send_text(s_client, frame,
+                                                    (int)(sizeof(frame) - 1),
+                                                    pdMS_TO_TICKS(2000));
+    return sent >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t kast_relay_panic_toggle(void)
+{
+    if (s_client == NULL || !s_link_up) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    static const char frame[] = "{\"type\":\"panic\"}";
+    const int sent = esp_websocket_client_send_text(s_client, frame,
+                                                    (int)(sizeof(frame) - 1),
+                                                    pdMS_TO_TICKS(2000));
+    return sent >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+bool kast_relay_panic_on(void)
+{
+    return s_panic_on;
+}
+
+uint32_t kast_relay_panic_version(void)
+{
+    return s_panic_version;
+}
+
 uint32_t kast_relay_scenes_count(void)
 {
     return s_scene_count;
@@ -1125,6 +1165,13 @@ static void relay_ws_handler(void *arg, esp_event_base_t base, int32_t id, void 
                 if (strstr(frame, "\"ok\":false") != NULL) {
                     kast_ui_link_status(KAST_LINK_OBS, false, "FAIL");
                 }
+            } else if (json_get_string(frame, "type", type, sizeof(type)) &&
+                       strcmp(type, "panic.status") == 0) {
+                /* relay mirrored the cover/mic state — repaint the
+                   status-bar kill switch (locks LVGL internally) */
+                s_panic_on = strstr(frame, "\"on\":true") != NULL;
+                s_panic_version++;
+                kast_ui_panic_state(s_panic_on);
             } else if (json_get_string(frame, "type", type, sizeof(type)) &&
                        (strcmp(type, "gfx.ack") == 0 || strcmp(type, "scene.ack") == 0)) {
                 /* same failure visibility for graphics and scene switches */

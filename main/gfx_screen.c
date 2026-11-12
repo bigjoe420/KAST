@@ -11,6 +11,11 @@
  * hiding it again after the graphic's configured duration — and fires the
  * bound sound through the SFX path when one is set. The program scene
  * never changes (owner-approved overlay mode, 2026-10-31).
+ *
+ * Moderation (owner-approved 2026-11-01): a CLEAR button above the grid
+ * instantly hides every playing overlay instead of waiting out its
+ * duration. The PANIC kill switch is not here — it lives in the status
+ * bar so it is reachable from every screen (owner call 2026-11-01).
  */
 #include <stdio.h>
 
@@ -20,7 +25,7 @@
 #include "ui.h"
 
 #define GFX_TILE_W    146
-#define GFX_TILE_H    86
+#define GFX_TILE_H    78   /* 4 rows of 12 + control row fit the 436 px page */
 #define GFX_PAD       6
 #define GFX_POLL_MS   500
 
@@ -33,6 +38,12 @@ static uint32_t  s_tile_count;
 /* snapshot the id at build time — the relay store is mutex-guarded and
    can change under us */
 static char s_tile_id[KAST_GFX_MAX][KAST_SFX_ID_LEN];
+
+static void clear_cb(lv_event_t *e)
+{
+    (void)e;
+    kast_relay_gfx_clear();
+}
 
 static void gfx_tile_cb(lv_event_t *e)
 {
@@ -118,6 +129,22 @@ void kast_gfx_load(lv_obj_t *parent)
     lv_obj_set_style_border_width(accent, 0, 0);
     lv_obj_set_style_shadow_color(accent, KAST_COLOR_GREEN, 0);
     lv_obj_set_style_shadow_width(accent, 12, 0);
+
+    /* CLEAR drops every playing overlay instantly (PANIC is in the
+       status bar now — see ui.c). */
+    lv_obj_t *clear_btn = lv_button_create(parent);
+    lv_obj_set_size(clear_btn, 180, 40);
+    lv_obj_align(clear_btn, LV_ALIGN_TOP_MID, 0, 54);
+    lv_obj_set_style_radius(clear_btn, 12, 0);
+    lv_obj_set_style_bg_color(clear_btn, KAST_COLOR_CARD, 0);
+    lv_obj_set_style_border_color(clear_btn, KAST_COLOR_AMBER, 0);
+    lv_obj_set_style_border_width(clear_btn, 2, 0);
+    lv_obj_add_event_cb(clear_btn, clear_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *clear_label = lv_label_create(clear_btn);
+    lv_label_set_text(clear_label, "CLEAR");
+    lv_obj_set_style_text_font(clear_label, &lv_font_montserrat_20, 0);
+    lv_obj_center(clear_label);
 
     s_hint = lv_label_create(parent);
     lv_label_set_text(s_hint,

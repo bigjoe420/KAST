@@ -19,6 +19,7 @@ class FakeObs {
     this.links = new Set();
     this.calls = [];
     this.restarts = [];
+    this.stops = [];
   }
 
   async request(type, data = {}) {
@@ -37,7 +38,11 @@ class FakeObs {
       return ok({ sceneItemId: 1 });
     }
     if (type === 'CreateSceneItem') { this.links.add(`${data.sceneName}/${data.sourceName}`); return ok(); }
-    if (type === 'TriggerMediaInputAction') { this.restarts.push(data.inputName); return ok(); }
+    if (type === 'TriggerMediaInputAction') {
+      if (data.mediaAction.includes('STOP')) this.stops.push(data.inputName);
+      else this.restarts.push(data.inputName);
+      return ok();
+    }
     if (type === 'RemoveInput') { this.inputs = this.inputs.filter((x) => x !== data.inputName); return ok(); }
     if (type === 'RemoveScene') { this.scenes = this.scenes.filter((x) => x !== data.sceneName); return ok(); }
     return ok();
@@ -117,6 +122,14 @@ test('missing required OBS capabilities produce a clear setup error', async () =
   const sfx = new ObsSfx({ client, listSounds: () => sounds });
   await assert.rejects(sfx.setup(), /does not support required OBS requests/);
   assert(!client.scenes.includes('KAST SFX'));
+});
+
+test('stopAll halts every managed sound and nothing else', async () => {
+  const client = new FakeObs();
+  client.inputs = ['KAST SFX - applause', 'KAST SFX - ding', 'My Music'];
+  const sfx = new ObsSfx({ client, listSounds: () => sounds });
+  await sfx.stopAll();
+  assert.deepEqual(client.stops.sort(), ['KAST SFX - applause', 'KAST SFX - ding'].sort());
 });
 
 test('source names are bounded and cannot imitate the managed scene', () => {

@@ -20,12 +20,14 @@
 #include "lvgl.h"
 
 #include "ui.h"
+#include "relay.h"
 
 static const char *TAG = "ui";
 
 static lv_display_t *s_disp;
 static lv_obj_t *s_content;        /* router fills this */
 static lv_obj_t *s_home_btn;
+static lv_obj_t *s_panic_btn;
 static lv_obj_t *s_links;          /* spangroup: WIFI · RELAY · OBS */
 static char s_link_text[KAST_LINK_COUNT][16];
 static bool s_link_ok[KAST_LINK_COUNT];
@@ -100,6 +102,34 @@ static void home_btn_cb(lv_event_t *e)
     kast_ui_show(KAST_SCREEN_HOME);
 }
 
+/* PANIC lives in the status bar — reachable from every screen, never
+ * buried on the GFX page (owner call 2026-11-01). One tap toggles the
+ * relay's stream cover + mic mute + KAST media stop. */
+static void panic_btn_cb(lv_event_t *e)
+{
+    lv_event_stop_bubbling(e);
+    kast_relay_panic_toggle();
+}
+
+void kast_ui_panic_state(bool on)
+{
+    if (!s_panic_btn) {
+        return;
+    }
+    if (!lvgl_port_lock(-1)) {
+        return;
+    }
+    lv_obj_set_style_bg_color(s_panic_btn,
+                              on ? KAST_COLOR_RED_HOT : KAST_COLOR_RED, 0);
+    lv_obj_set_style_shadow_color(s_panic_btn, KAST_COLOR_RED_HOT, 0);
+    lv_obj_set_style_shadow_width(s_panic_btn, on ? 14 : 0, 0);
+    lv_obj_t *label = lv_obj_get_child(s_panic_btn, 0);
+    if (label) {
+        lv_label_set_text(label, on ? "PANIC!" : "PANIC");
+    }
+    lvgl_port_unlock();
+}
+
 void kast_ui_show(kast_screen_t screen)
 {
     if (screen < 0 || screen >= KAST_SCREEN_COUNT || screen == s_current) {
@@ -146,10 +176,11 @@ static void build_chrome(lv_obj_t *scr)
     s_links = lv_spangroup_create(bar);
     lv_obj_set_style_text_font(s_links, &lv_font_montserrat_12, 0);
     /* Right-align inside the fixed box: text must end at the right edge
-     * no matter how wide the words render at the current font size. */
+     * no matter how wide the words render at the current font size.
+     * Box stops short of the PANIC button (right edge -104). */
     lv_obj_set_style_text_align(s_links, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_size(s_links, 360, 30);
-    lv_obj_align(s_links, LV_ALIGN_RIGHT_MID, -16, 0);
+    lv_obj_set_size(s_links, 250, 30);
+    lv_obj_align(s_links, LV_ALIGN_RIGHT_MID, -104, 0);
     for (int i = 0; i < KAST_LINK_COUNT; i++) {
         if (i > 0) {
             s_span_sep[i - 1] = lv_spangroup_add_span(s_links);
@@ -179,6 +210,22 @@ static void build_chrome(lv_obj_t *scr)
     lv_obj_set_style_text_color(home_label, KAST_COLOR_TEXT, 0);
     lv_obj_set_style_text_color(home_label, KAST_COLOR_BG, LV_STATE_PRESSED);
     lv_obj_center(home_label);
+
+    /* PANIC — moderation kill switch, always on screen (2026-11-01). */
+    s_panic_btn = lv_button_create(bar);
+    lv_obj_set_size(s_panic_btn, 92, 34);
+    lv_obj_align(s_panic_btn, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_set_style_radius(s_panic_btn, 8, 0);
+    lv_obj_set_style_border_width(s_panic_btn, 0, 0);
+    lv_obj_add_event_cb(s_panic_btn, panic_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *panic_label = lv_label_create(s_panic_btn);
+    lv_label_set_text(panic_label, "PANIC");
+    lv_obj_set_style_text_font(panic_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(panic_label, KAST_COLOR_TEXT, 0);
+    lv_obj_center(panic_label);
+    /* boots idle; the relay's panic.status pushes the live state */
+    lv_obj_set_style_bg_color(s_panic_btn, KAST_COLOR_RED, 0);
 
     /* Content container — the router's canvas */
     s_content = lv_obj_create(scr);

@@ -29,6 +29,9 @@ extern "C" {
 #define KAST_COLOR_GREEN_DIM lv_color_hex(0x1E5A12)
 #define KAST_COLOR_TEXT      lv_color_hex(0xE8F5E8)
 #define KAST_COLOR_TEXT_DIM  lv_color_hex(0x6E8A6E)
+#define KAST_COLOR_AMBER     lv_color_hex(0xE5A32D)  /* CLEAR moderation tile */
+#define KAST_COLOR_RED       lv_color_hex(0xC2241A)  /* PANIC button */
+#define KAST_COLOR_RED_HOT   lv_color_hex(0xFF3B28)  /* PANIC engaged */
 
 #define KAST_H_RES 480
 #define KAST_V_RES 480
@@ -70,6 +73,11 @@ void kast_ui_show(kast_screen_t screen);
  * overrides the word (e.g. "RETRY"); NULL restores "--".
  */
 void kast_ui_link_status(kast_link_t link, bool ok, const char *text);
+
+/* Mirror the relay's PANIC state on the status-bar kill switch (engaged =
+ * hot red + glow + "PANIC!"). Same call rules as kast_ui_link_status():
+ * safe from any task, never from LVGL task context. */
+void kast_ui_panic_state(bool on);
 
 /* Content container the active screen builds into (screen modules only). */
 lv_obj_t *kast_ui_content(void);

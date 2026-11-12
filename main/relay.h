@@ -136,6 +136,19 @@ bool kast_relay_gfx_get(uint32_t idx, char *id, size_t id_len,
 uint32_t kast_relay_gfx_version(void);
 esp_err_t kast_relay_gfx_play(const char *id);
 
+/* CLEAR tile (owner-approved 2026-11-01): send {"type":"gfx.clear"} —
+ * the relay instantly hides every revealed GFX overlay instead of letting
+ * it run out its duration. Same call rules as kast_relay_gfx_play(). */
+esp_err_t kast_relay_gfx_clear(void);
+
+/* PANIC button (owner-approved 2026-11-01): send {"type":"panic"} — the
+ * relay toggles the stream cover + mic mute in OBS. The relay broadcasts
+ * {"type":"panic.status","on":bool} on every change and on connect; the
+ * device mirrors that state on the button. Same call rules as above. */
+esp_err_t kast_relay_panic_toggle(void);
+bool kast_relay_panic_on(void);
+uint32_t kast_relay_panic_version(void);
+
 /* ------------------------------------------------------------------ */
 /* Scene controller (Phase 4)                                          */
 /* ------------------------------------------------------------------ */

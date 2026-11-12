@@ -16,6 +16,7 @@
 const SCENE_NAME = 'KAST GFX';
 const SOURCE_PREFIX = 'KAST GFX - ';
 const RESTART = 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART';
+const STOP = 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP';
 const REQUIRED_REQUESTS = [
   'GetVersion', 'GetSceneList', 'CreateScene', 'GetInputList', 'CreateInput',
   'GetCurrentProgramScene', 'GetSceneItemId', 'CreateSceneItem',
@@ -34,6 +35,7 @@ class ObsGfx {
     this.logger = logger;
     this.setupPromise = null;
     this.hideTimers = new Map();   /* id -> hide timeout */
+    this.playing = new Map();      /* id -> sceneItemId currently revealed */
   }
 
   async checkCapabilities() {
@@ -115,6 +117,7 @@ class ObsGfx {
       sceneName: SCENE_NAME, sceneItemId, sceneItemEnabled: true,
     });
     await this.client.request('TriggerMediaInputAction', { inputName, mediaAction: RESTART });
+    this.playing.set(id, sceneItemId);
     this.scheduleHide(id, sceneItemId);
     return gfx;
   }
@@ -124,10 +127,44 @@ class ObsGfx {
     const { durationMs } = this.bindingFor(id);
     this.hideTimers.set(id, setTimeout(() => {
       this.hideTimers.delete(id);
+      this.playing.delete(id);
       this.client.request('SetSceneItemEnabled', {
         sceneName: SCENE_NAME, sceneItemId, sceneItemEnabled: false,
       }).catch((err) => this.logger.log(`[obs] gfx hide '${id}' failed: ${err.message}`));
     }, durationMs));
+  }
+
+  /* CLEAR moderation tile: instantly hide every revealed overlay instead
+     of waiting out its duration (owner-approved 2026-11-01). */
+  async clear() {
+    for (const timer of this.hideTimers.values()) clearTimeout(timer);
+    this.hideTimers.clear();
+    const items = [...this.playing.entries()];
+    this.playing.clear();
+    for (const [id, sceneItemId] of items) {
+      try {
+        await this.client.request('SetSceneItemEnabled', {
+          sceneName: SCENE_NAME, sceneItemId, sceneItemEnabled: false,
+        });
+      } catch (err) {
+        this.logger.log(`[obs] gfx clear '${id}' failed: ${err.message}`);
+      }
+    }
+    return items.length;
+  }
+
+  /* PANIC support: halt every managed graphic's playback — hiding the
+     scene item stops the picture but not the clip's audio path on every
+     OBS build, so stop the media explicitly (owner 2026-11-01). */
+  async stopAll() {
+    const inputs = await this.client.request('GetInputList');
+    for (const input of inputs.inputs) {
+      if (input.inputName.startsWith(SOURCE_PREFIX)) {
+        await this.client.request('TriggerMediaInputAction', {
+          inputName: input.inputName, mediaAction: STOP,
+        }).catch((err) => this.logger.log(`[obs] gfx stop '${input.inputName}' failed: ${err.message}`));
+      }
+    }
   }
 
   /* Detach one managed source before its file is replaced/removed (OBS
@@ -135,6 +172,7 @@ class ObsGfx {
   async release(id) {
     clearTimeout(this.hideTimers.get(id));
     this.hideTimers.delete(id);
+    this.playing.delete(id);
     const inputName = sourceName(id);
     const inputs = await this.client.request('GetInputList');
     if (inputs.inputs.some((input) => input.inputName === inputName)) {
@@ -145,6 +183,7 @@ class ObsGfx {
   async remove() {
     for (const timer of this.hideTimers.values()) clearTimeout(timer);
     this.hideTimers.clear();
+    this.playing.clear();
     const inputs = await this.client.request('GetInputList');
     for (const input of inputs.inputs) {
       if (input.inputName.startsWith(SOURCE_PREFIX)) {

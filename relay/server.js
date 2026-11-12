@@ -453,6 +453,7 @@ const { ObsClient } = require('./obs');
 const { ObsSfx } = require('./obs_sfx');
 const { ObsGfx } = require('./obs_gfx');
 const { ObsScenes } = require('./obs_scenes');
+const { ObsPanic } = require('./obs_panic');
 const soundLibrary = require('./sound_library');
 const gfxLibrary = require('./gfx_library');
 
@@ -513,6 +514,9 @@ const obsGfx = new ObsGfx({
   bindingFor: (id) => gfxLibrary.bindingFor(GFX_DIR, id),
 });
 const obsScenes = new ObsScenes({ client: obsClient, selectionPath: SCENE_TILES_PATH });
+const obsPanic = new ObsPanic({
+  client: obsClient, micName: process.env.KAST_PANIC_MIC || '',
+});
 
 /* Box scene tiles: pushed on connect, on OBS scene changes, and after
    every switch. Best-effort — OBS down means an empty catalog, and the
@@ -537,6 +541,9 @@ obsClient.on('event', ({ eventType }) => {
   /* The overlay scenes must follow the user to the newly active scene. */
   obsSfx.linkActiveScene().catch((err) => console.log(`[obs] sfx relink failed: ${err.message}`));
   obsGfx.linkActiveScene().catch((err) => console.log(`[obs] gfx relink failed: ${err.message}`));
+  if (obsPanic.active) {
+    obsPanic.linkActiveScene().catch((err) => console.log(`[obs] panic relink failed: ${err.message}`));
+  }
   pushScenesCatalog();
 });
 
@@ -580,6 +587,46 @@ async function gfxPlay(id, ws) {
   }
 }
 
+/* CLEAR tile: instantly hide every revealed GFX overlay. */
+async function gfxClear(ws) {
+  try {
+    const hidden = await obsGfx.clear();
+    console.log(`[relay] gfx.clear (${hidden} overlay(s) hidden)`);
+    const ack = { type: 'gfx.ack', id: 'clear', ok: true };
+    if (ws) ws.send(JSON.stringify(ack)); else broadcast(ack);
+    return true;
+  } catch (err) {
+    console.log(`[relay] gfx.clear failed: ${err.message}`);
+    const ack = { type: 'gfx.ack', id: 'clear', ok: false, error: err.message.slice(0, 120) };
+    if (ws) ws.send(JSON.stringify(ack)); else broadcast(ack);
+    return false;
+  }
+}
+
+/* PANIC button: one tap covers the stream, mutes the mic, stops every
+   KAST sound/graphic still playing, and drops any visible overlay — all
+   in the same beat (owner 2026-11-01: audio must stop with the tap, not
+   trail it). Next tap restores. State is broadcast so every connected
+   box shows it. */
+async function panicToggle(ws) {
+  try {
+    const engaging = !obsPanic.active;
+    const jobs = [obsPanic.toggle()];
+    if (engaging) {
+      jobs.push(obsSfx.stopAll(), obsGfx.stopAll(), obsGfx.clear());
+    }
+    const [on] = await Promise.all(jobs);
+    console.log(`[relay] PANIC ${on ? 'ON — covered, mic muted, media stopped' : 'off — restored'}`);
+    broadcast({ type: 'panic.status', on });
+    if (ws) ws.send(JSON.stringify({ type: 'panic.ack', ok: true, on }));
+    return true;
+  } catch (err) {
+    console.log(`[relay] panic toggle failed: ${err.message}`);
+    if (ws) ws.send(JSON.stringify({ type: 'panic.ack', ok: false, error: err.message.slice(0, 120) }));
+    return false;
+  }
+}
+
 async function sceneSwitch(name, ws) {
   const safe = sfxWire(name, 24);
   try {
@@ -599,7 +646,7 @@ async function obsCommand(msg, ws) {
   try {
     if (msg.action === 'setup') { await obsSfx.setup(); await obsGfx.setup(); }
     else if (msg.action === 'test') await sfxPlay(msg.id || sfxEntries()[0]?.id, null);
-    else if (msg.action === 'remove') { await obsSfx.remove(); await obsGfx.remove(); }
+    else if (msg.action === 'remove') { await obsSfx.remove(); await obsGfx.remove(); await obsPanic.remove(); }
     else if (msg.action === 'release' && obsClient.state === 'connected') await obsSfx.release(sfxWire(msg.id, 20));
     else if (msg.action === 'gfxrelease' && obsClient.state === 'connected') await obsGfx.release(sfxWire(msg.id, 20));
     else if (msg.action === 'gfxplay') await gfxPlay(msg.id || gfxEntries()[0]?.id, null);
@@ -682,6 +729,7 @@ wss.on('connection', (ws, req) => {
     ws.send(sfxCatalogFrame());
     ws.send(gfxCatalogFrame());
     ws.send(JSON.stringify({ type: 'obs.status', status: obsClient.state, detail: obsClient.detail }));
+    ws.send(JSON.stringify({ type: 'panic.status', on: obsPanic.active }));
     pushScenesCatalog(ws);
   }
 
@@ -744,6 +792,14 @@ wss.on('connection', (ws, req) => {
       case 'gfx.play':
         /* device tapped a motion-graphics tile */
         gfxPlay(msg.id, ws);
+        break;
+      case 'gfx.clear':
+        /* CLEAR tile: instantly hide every playing overlay */
+        gfxClear(ws);
+        break;
+      case 'panic':
+        /* PANIC button: cover the stream + mute the mic (toggle) */
+        panicToggle(ws);
         break;
       case 'scene.switch':
         /* device tapped a scene tile */

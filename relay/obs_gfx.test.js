@@ -19,6 +19,7 @@ class FakeObs {
     this.itemIds = new Map();     /* "KAST GFX/<source>" -> id */
     this.enabled = new Map();     /* itemId -> bool */
     this.restarts = [];
+    this.stops = [];
     this.calls = [];
     this.nextId = 1;
   }
@@ -49,7 +50,11 @@ class FakeObs {
       return { sceneItemId: 999 };
     }
     if (type === 'SetSceneItemEnabled') { this.enabled.set(data.sceneItemId, data.sceneItemEnabled); return {}; }
-    if (type === 'TriggerMediaInputAction') { this.restarts.push(data.inputName); return {}; }
+    if (type === 'TriggerMediaInputAction') {
+      if (data.mediaAction.includes('STOP')) this.stops.push(data.inputName);
+      else this.restarts.push(data.inputName);
+      return {};
+    }
     if (type === 'RemoveInput') {
       this.inputs = this.inputs.filter((x) => x !== data.inputName);
       return {};
@@ -119,6 +124,41 @@ test('repeated taps reset the hide timer and never duplicate sources', async () 
   await new Promise((resolve) => setTimeout(resolve, 120));
   assert.equal(client.isEnabled(sourceName('gg pop')), false);
   assert.deepEqual(client.restarts, [sourceName('gg pop'), sourceName('gg pop')]);
+});
+
+test('clear instantly hides revealed overlays and cancels their timers', async () => {
+  const client = new FakeObs();
+  const gfx = makeGfx(client);
+  await gfx.play('gg pop');
+  await gfx.play('alert buzz');
+  const hidden = await gfx.clear();
+  assert.equal(hidden, 2);
+  assert.equal(client.isEnabled(sourceName('gg pop')), false);
+  assert.equal(client.isEnabled(sourceName('alert buzz')), false);
+  /* cancelled timers must not fire later and corrupt a fresh play */
+  await gfx.play('gg pop');
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  /* only the fresh 60 ms timer fired: exactly one hide after the replay */
+  const hides = client.calls.filter((c) => c.type === 'SetSceneItemEnabled' && c.data.sceneItemEnabled === false);
+  assert.equal(hides.length, 3);
+});
+
+test('clear with nothing playing is a no-op that touches no OBS items', async () => {
+  const client = new FakeObs();
+  const gfx = makeGfx(client);
+  const hidden = await gfx.clear();
+  assert.equal(hidden, 0);
+  assert(!client.calls.some((c) => c.type === 'SetSceneItemEnabled'));
+});
+
+test('stopAll halts every managed graphic and nothing else', async () => {
+  const client = new FakeObs();
+  client.inputs = ['KAST GFX - gg pop', 'My Overlay'];
+  const gfx = makeGfx(client);
+  await gfx.setup();
+  await gfx.stopAll();
+  assert.deepEqual(client.stops.sort(),
+                   ['KAST GFX - alert buzz', 'KAST GFX - gg pop'].sort());
 });
 
 test('playing an unknown graphic fails without calling OBS', async () => {

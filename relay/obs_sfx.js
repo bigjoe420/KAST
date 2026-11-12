@@ -4,6 +4,7 @@ const SCENE_NAME = 'KAST SFX';
 const SOURCE_PREFIX = 'KAST SFX - ';
 const MONITOR_AND_OUTPUT = 'OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT';
 const RESTART = 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART';
+const STOP = 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP';
 const REQUIRED_REQUESTS = [
   'GetVersion', 'GetSceneList', 'CreateScene', 'GetInputList', 'CreateInput',
   'SetInputAudioMonitorType', 'SetInputVolume', 'GetCurrentProgramScene',
@@ -94,6 +95,19 @@ class ObsSfx {
     await this.setup();
     await this.client.request('TriggerMediaInputAction', { inputName: sourceName(id), mediaAction: RESTART });
     return sound;
+  }
+
+  /* PANIC support: halt every managed sound immediately — a playing clip
+     must not keep sounding under the stream cover (owner 2026-11-01). */
+  async stopAll() {
+    const inputs = await this.client.request('GetInputList');
+    for (const input of inputs.inputs) {
+      if (input.inputName.startsWith(SOURCE_PREFIX)) {
+        await this.client.request('TriggerMediaInputAction', {
+          inputName: input.inputName, mediaAction: STOP,
+        }).catch((err) => this.logger.log(`[obs] sfx stop '${input.inputName}' failed: ${err.message}`));
+      }
+    }
   }
 
   async setVolume(value) {
