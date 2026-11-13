@@ -45,11 +45,13 @@ class ObsScenes {
     return clean;
   }
 
-  /* Every user scene in OBS, in OBS order — the Companion picker shows
-     this list with the current selection pre-checked. */
+  /* Every user scene in OBS, in STUDIO-UI order (top of the scene list
+     first). GetSceneList returns the array bottom-to-top — the reverse of
+     what the user sees — so flip it. Every consumer (Companion picker,
+     box tile order) matches the OBS UI this way. */
   async listUserScenes() {
     const { scenes } = await this.client.request('GetSceneList');
-    return scenes.map((scene) => scene.sceneName).filter(isUserScene);
+    return scenes.map((scene) => scene.sceneName).filter(isUserScene).reverse();
   }
 
   async currentScene() {
@@ -57,11 +59,14 @@ class ObsScenes {
     return current.sceneName || current.currentProgramSceneName || '';
   }
 
-  /* The box tile catalog: selected scenes that still exist in OBS,
-     selection order preserved, plus the live program scene name. */
+  /* The box tile catalog: selected scenes that still exist in OBS, ordered
+     by the studio UI (top of the OBS list = top tile). The selection file
+     is a SET — its stored order is legacy-array order from before the
+     GetSceneList reversal fix, so never display in file order. */
   async catalog() {
-    const existing = new Set(await this.listUserScenes());
-    const tiles = this.readSelection().filter((name) => existing.has(name));
+    const ordered = await this.listUserScenes();
+    const selected = new Set(this.readSelection());
+    const tiles = ordered.filter((name) => selected.has(name));
     return { scenes: tiles, current: await this.currentScene() };
   }
 

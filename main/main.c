@@ -53,15 +53,18 @@ static const char *reset_reason_str(esp_reset_reason_t r)
     }
 }
 
-/* Power sequencing: a cold boot from battery browns out if the backlight
- * slams to 100% while the panel, PSRAM, and radio all surge at once (the
- * rail collapses, brownout detector resets, loop forever). Ramp the
- * backlight up slowly, then start Wi-Fi/SD only after the surge has
- * passed. Harmless on USB; mandatory on battery. */
+/* Power sequencing (battery cold-start, attempt v2 — 2026-11-12): the
+ * 2026-10-25 ramp alone still browned out, because the surge that kills
+ * the rail is the PANEL + PSRAM framebuffer coming alive, not the
+ * backlight. v2 therefore stages the whole boot: app_main idles ~1.2 s
+ * before the display chain so a sagging cell can recover from switch
+ * bounce, then this task walks the backlight 0→100% over ~4.5 s and only
+ * then starts Wi-Fi/SD. Harmless on USB (a slow fade-in once per power
+ * cycle); on battery the brownout margin is the whole point. */
 static void kast_power_up_task(void *arg)
 {
     (void)arg;
-    for (int p = 10; p <= 100; p += 3) {
+    for (int p = 0; p <= 100; p += 1) {
         kast_backlight_set((uint8_t)p);
         vTaskDelay(pdMS_TO_TICKS(45));
     }
@@ -113,8 +116,11 @@ void app_main(void)
 
     /* Display: raw RGB panel + vendor ST7701 init stream (display.c).
      * No disp_on_off call: this panel has no DISP GPIO (the RGB engine
-     * starts at panel_init; display-on is the vendor 0x29 command). */
+     * starts at panel_init; display-on is the vendor 0x29 command).
+     * Backlight is initialized at duty 0, then the boot idles before the
+     * panel/PSRAM surge — battery cold-start staging (see power task). */
     ESP_ERROR_CHECK(kast_backlight_init());
+    vTaskDelay(pdMS_TO_TICKS(1200));
     esp_lcd_panel_handle_t panel = NULL;
     ESP_ERROR_CHECK(kast_display_init(&panel));
 
@@ -123,10 +129,9 @@ void app_main(void)
     ESP_ERROR_CHECK(kast_touch_init(&touch));
 
     /* UI: LVGL bounce-buffer mode on the RGB panel, then Home screen.
-     * Backlight starts dim; kast_power_up_task ramps it and brings the
-     * radio/SD up after the cold-start surge has passed. */
+     * kast_power_up_task owns the backlight ramp (0→100 over ~4.5 s)
+     * and brings the radio/SD up after the cold-start surge. */
     ESP_ERROR_CHECK(kast_ui_init(panel, touch));
-    kast_backlight_set(10);
 
     /* Speaker: I2S amp (NS4168) reserved for local interface sounds;
      * decode + playback run on their own task. Pins 1/2/40 per

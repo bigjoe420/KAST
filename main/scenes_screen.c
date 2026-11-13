@@ -9,6 +9,11 @@
  *
  * The device only displays and switches: scenes are created, named, and
  * deleted in OBS — KAST never mutates the user's scene list.
+ *
+ * Layout (owner 2026-10-31): the tiles FILL the screen — no title row,
+ * the grid is full-bleed. Tile height is recomputed per catalog so the
+ * grid always reaches the bottom edge; four tiles or fewer go into a
+ * single column of big buttons.
  */
 #include <stdio.h>
 #include <string.h>
@@ -18,9 +23,11 @@
 #include "relay.h"
 #include "ui.h"
 
-#define SCENE_TILE_W   226
-#define SCENE_TILE_H   62
-#define SCENE_PAD      6
+#define SCENE_PAD      8
+#define SCENE_COL_GAP  8
+#define SCENE_ROW_GAP  8
+#define SCENE_TILE_MIN 48
+#define SCENE_TILE_MAX 140
 #define SCENE_POLL_MS  500
 
 static lv_obj_t *s_grid;
@@ -32,6 +39,7 @@ static uint32_t  s_tile_count;
 /* snapshot names at build time — the relay store changes under us */
 static char s_tile_name[KAST_SCENES_MAX][KAST_SCENE_NAME_LEN];
 static lv_obj_t *s_tiles[KAST_SCENES_MAX];
+static lv_coord_t s_tile_h;   /* computed per rebuild — grid must fill */
 
 static void scene_tile_cb(lv_event_t *e)
 {
@@ -61,10 +69,28 @@ static void scenes_highlight(void)
     }
 }
 
-static void scene_tile_add(lv_obj_t *parent, const char *name, uint32_t idx)
+/* Grid geometry for the current tile count: enough columns to look like
+ * a control panel, tall enough to always reach the bottom edge. Returns
+ * the tile width. */
+static lv_coord_t scenes_grid_geom(uint32_t count, lv_coord_t *tile_h)
+{
+    const lv_coord_t page_h = KAST_V_RES - 44;   /* status bar owns 44 */
+    const lv_coord_t cols = count <= 4 ? 1 : 2;
+    const lv_coord_t rows = (lv_coord_t)((count + cols - 1) / cols);
+    const lv_coord_t w = (KAST_H_RES - 2 * SCENE_PAD -
+                          (cols - 1) * SCENE_COL_GAP) / cols;
+    lv_coord_t h = (page_h - 2 * SCENE_PAD - (rows - 1) * SCENE_ROW_GAP) / rows;
+    if (h < SCENE_TILE_MIN) h = SCENE_TILE_MIN;
+    if (h > SCENE_TILE_MAX) h = SCENE_TILE_MAX;
+    *tile_h = h;
+    return w;
+}
+
+static void scene_tile_add(lv_obj_t *parent, const char *name, lv_coord_t w,
+                           uint32_t idx)
 {
     lv_obj_t *btn = lv_button_create(parent);
-    lv_obj_set_size(btn, SCENE_TILE_W, SCENE_TILE_H);
+    lv_obj_set_size(btn, w, s_tile_h);
     lv_obj_set_style_radius(btn, 12, 0);
     lv_obj_set_style_bg_color(btn, KAST_COLOR_CARD, 0);
     lv_obj_set_style_border_color(btn, KAST_COLOR_GREEN_DIM, 0);
@@ -77,7 +103,7 @@ static void scene_tile_add(lv_obj_t *parent, const char *name, uint32_t idx)
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, name);
     lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(label, SCENE_TILE_W - 16);
+    lv_obj_set_width(label, w - 16);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_20, 0);
     lv_obj_center(label);
@@ -96,11 +122,12 @@ static void scenes_grid_rebuild(void)
     }
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
 
+    const lv_coord_t w = scenes_grid_geom(count, &s_tile_h);
     for (uint32_t i = 0; i < count && i < KAST_SCENES_MAX; i++) {
         if (!kast_relay_scenes_get(i, s_tile_name[i], sizeof(s_tile_name[i]))) {
             continue;
         }
-        scene_tile_add(s_grid, s_tile_name[i], i);
+        scene_tile_add(s_grid, s_tile_name[i], w, i);
         s_tile_count++;
     }
     scenes_highlight();
@@ -119,21 +146,6 @@ void kast_scenes_load(lv_obj_t *parent)
 {
     lv_obj_set_style_bg_color(parent, KAST_COLOR_BG, 0);
 
-    lv_obj_t *title = lv_label_create(parent);
-    lv_label_set_text(title, "SCENES");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
-    lv_obj_set_style_text_color(title, KAST_COLOR_TEXT, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
-
-    lv_obj_t *accent = lv_obj_create(parent);
-    lv_obj_set_size(accent, 160, 4);
-    lv_obj_align(accent, LV_ALIGN_TOP_MID, 0, 44);
-    lv_obj_set_style_radius(accent, 2, 0);
-    lv_obj_set_style_bg_color(accent, KAST_COLOR_GREEN, 0);
-    lv_obj_set_style_border_width(accent, 0, 0);
-    lv_obj_set_style_shadow_color(accent, KAST_COLOR_GREEN, 0);
-    lv_obj_set_style_shadow_width(accent, 12, 0);
-
     s_hint = lv_label_create(parent);
     lv_label_set_text(s_hint,
                       "No scene tiles yet.\n"
@@ -144,7 +156,8 @@ void kast_scenes_load(lv_obj_t *parent)
     lv_obj_set_style_text_align(s_hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_hint, LV_ALIGN_CENTER, 0, 20);
 
-    /* two columns of wider tiles — scene names run longer than sound ids */
+    /* Full-bleed grid (owner 2026-10-31): tiles fill the whole page, no
+       title row. Tile sizes come from scenes_grid_geom() per rebuild. */
     s_grid = lv_obj_create(parent);
     lv_obj_set_size(s_grid, KAST_H_RES, LV_SIZE_CONTENT);
     lv_obj_align(s_grid, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -154,8 +167,8 @@ void kast_scenes_load(lv_obj_t *parent)
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(s_grid, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(s_grid, SCENE_PAD, 0);
-    lv_obj_set_style_pad_column(s_grid, SCENE_PAD, 0);
+    lv_obj_set_style_pad_row(s_grid, SCENE_ROW_GAP, 0);
+    lv_obj_set_style_pad_column(s_grid, SCENE_COL_GAP, 0);
     lv_obj_set_scrollable(s_grid, false);
 
     s_built_version = kast_relay_scenes_version();
