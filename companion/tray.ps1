@@ -118,7 +118,7 @@ function Show-ObsSetup {
     $label = New-Object System.Windows.Forms.Label
     $label.Location = New-Object System.Drawing.Point(18, 16)
     $label.Size = New-Object System.Drawing.Size(490, 105)
-    $label.Text = "In OBS: Tools > WebSocket Server Settings.`r`nEnable the server, keep port 4455, then enter its password below.`r`nLeave the password blank only if OBS authentication is disabled.`r`n`r`nKAST adds only its own SFX/GFX scenes and sources. Your scenes stay untouched."
+    $label.Text = "In OBS: Tools > WebSocket Server Settings - tick Enable WebSocket server, keep port 4455, click Generate Password, then Apply. Click Show Connect Info and copy the password.`r`nPaste it below. Leave it blank only if OBS authentication is disabled.`r`n`r`nKAST adds only its own SFX/GFX scenes and sources. Your scenes stay untouched."
     $form.Controls.Add($label)
     $pwLabel = New-Object System.Windows.Forms.Label
     $pwLabel.Text = 'OBS WebSocket password'

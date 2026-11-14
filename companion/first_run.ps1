@@ -64,8 +64,11 @@ Welcome to KAST. You need: your KAST box, a USB data cable, and OBS running.
 
 1.  Plug the box in with the USB cable, then click Detect box.
 2.  Click Flash firmware and wait for the OK lines.
-3.  Click Set up OBS (asks for the OBS WebSocket password).
-4.  On the box, enter your Wi-Fi once. The box finds this PC by itself.
+3.  In OBS: Tools > WebSocket Server Settings - enable the server,
+    click Generate Password, Apply, then Show Connect Info to copy it.
+    Then click Set up OBS here and paste that password.
+4.  On the box, enter your Wi-Fi once - the same network this PC is on.
+    The box finds this PC by itself (both must share one network).
 5.  Click Start KAST Companion - it lives in the system tray.
     Right-click its tray icon to authorize Kick when you are ready.
 "@

@@ -16,7 +16,7 @@ $form.MaximizeBox = $false
 $label = New-Object System.Windows.Forms.Label
 $label.Location = New-Object System.Drawing.Point(18, 16)
 $label.Size = New-Object System.Drawing.Size(490, 85)
-$label.Text = "OBS WebSocket is enabled. Now enter its password.`r`n(OBS > Tools > WebSocket Server Settings > Show Password)`r`n`r`nKAST adds only its own SFX scene and sources."
+$label.Text = "First, in OBS: Tools > WebSocket Server Settings - tick Enable WebSocket server, click Generate Password, then Apply. Click Show Connect Info and copy the password.`r`n`r`nPaste that password below. KAST adds only its own SFX scene and sources."
 $form.Controls.Add($label)
 $pw = New-Object System.Windows.Forms.TextBox
 $pw.Location = New-Object System.Drawing.Point(18, 112)

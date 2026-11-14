@@ -86,6 +86,7 @@ Copy-Item (Join-Path $root 'companion\kast.ico') (Join-Path $payload 'companion'
 # scene_tiles.json — those are per-user and get created at runtime.
 $relayFiles = @(
     'server.js', 'obs.js', 'obs_sfx.js', 'obs_gfx.js', 'obs_scenes.js',
+    'obs_panic.js',
     'obs_command.js', 'gfx_command.js', 'scene_command.js', 'sound_command.js',
     'sound_library.js', 'gfx_library.js', 'play_sfx.ps1', 'package.json'
 )
