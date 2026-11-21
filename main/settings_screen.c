@@ -173,12 +173,12 @@ void kast_settings_load(lv_obj_t *parent)
     lv_textarea_set_text(s_pass_ta, pass);
     lv_textarea_set_password_mode(s_pass_ta, true);
 
-    s_host_ta = make_field(parent, "Relay host (PC IP)", 140, 63);
+    s_host_ta = make_field(parent, "Relay host (optional)", 140, 63);
     lv_textarea_set_text(s_host_ta, host);
     lv_obj_add_event_cb(s_host_ta, ta_host_board_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_host_ta, ta_host_board_cb, LV_EVENT_CLICKED, NULL);
 
-    s_port_ta = make_field(parent, "Relay port", 182, 5);
+    s_port_ta = make_field(parent, "Relay port (optional)", 182, 5);
     lv_obj_add_event_cb(s_port_ta, ta_host_board_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_port_ta, ta_host_board_cb, LV_EVENT_CLICKED, NULL);
     if (port > 0) {
@@ -205,7 +205,9 @@ void kast_settings_load(lv_obj_t *parent)
     lv_obj_center(save_label);
 
     s_msg_label = lv_label_create(parent);
-    lv_label_set_text(s_msg_label, "Wi-Fi and relay settings — apply on SAVE");
+    /* One line only: the on-screen keyboard opens over the bottom ~180 px
+     * of this screen, and a wrapping second line would slide under it. */
+    lv_label_set_text(s_msg_label, "Relay: leave empty - the box finds the PC.");
     lv_obj_set_style_text_font(s_msg_label, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_msg_label, KAST_COLOR_TEXT_DIM, 0);
     lv_obj_align(s_msg_label, LV_ALIGN_TOP_MID, 0, 226);
@@ -213,7 +215,10 @@ void kast_settings_load(lv_obj_t *parent)
     /* Stock keyboard, panel-sized. Attached to whichever field is focused.
      * USER_1 carries the IP layout (digits + dot, defined above). */
     s_keyboard = lv_keyboard_create(parent);
-    lv_obj_set_size(s_keyboard, KAST_H_RES, 200);
+    /* 180, not 200: 200 covered the helper line under the Relay port field
+     * whenever the keyboard was open (screen 480 = 44 status bar + content;
+     * keyboard top landed mid-label). */
+    lv_obj_set_size(s_keyboard, KAST_H_RES, 180);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(s_keyboard, KAST_COLOR_CARD, 0);
     lv_obj_set_style_border_width(s_keyboard, 0, 0);

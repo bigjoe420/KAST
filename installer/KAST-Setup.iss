@@ -49,7 +49,7 @@ Name: "{autodesktop}\KAST Companion"; Filename: "{app}\companion\KAST Companion.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "KAST Companion"; ValueType: string; ValueData: """{app}\companion\KAST Companion.cmd"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -STA -File ""{app}\companion\first_run.ps1"""; Description: "Run KAST first-time setup (flash the box, set up OBS)"; Flags: postinstall nowait unchecked
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -STA -File ""{app}\companion\first_run.ps1"""; Description: "Run KAST first-time setup (flash the box, set up OBS)"; Flags: postinstall nowait
 
 [Code]
 { Before overwriting files, stop any running KAST tray/relay from THIS

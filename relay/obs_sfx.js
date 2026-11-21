@@ -77,16 +77,39 @@ class ObsSfx {
     await this.linkActiveScene();
   }
 
+  /* Nest KAST SFX into the live scene. Retries the whole link: OBS refuses
+     the nest while its overlay scene is mid-teardown or the scene collection
+     is churning (CreateSceneItem 700 = creation failed), and a concurrent
+     relink wins with 601. One transient failure must not leave sounds
+     unrouted until the next scene change. */
   async linkActiveScene() {
-    const current = await this.client.request('GetCurrentProgramScene');
-    const sceneName = current.sceneName || current.currentProgramSceneName;
-    if (!sceneName || sceneName === SCENE_NAME) return;
-    try {
-      await this.client.request('GetSceneItemId', { sceneName, sourceName: SCENE_NAME });
-    } catch (err) {
-      if (err.code !== 600) throw err;
-      await this.client.request('CreateSceneItem', { sceneName, sourceName: SCENE_NAME, sceneItemEnabled: true });
+    let lastErr = null;
+    let lastScene = '';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const current = await this.client.request('GetCurrentProgramScene');
+        const sceneName = current.sceneName || current.currentProgramSceneName;
+        if (!sceneName || sceneName === SCENE_NAME) return;
+        lastScene = sceneName;
+        try {
+          await this.client.request('GetSceneItemId', { sceneName, sourceName: SCENE_NAME });
+          return;
+        } catch (err) {
+          if (err.code !== 600) throw err;
+        }
+        try {
+          await this.client.request('CreateSceneItem', { sceneName, sourceName: SCENE_NAME, sceneItemEnabled: true });
+          return;
+        } catch (err) {
+          if (err.code === 601) return;   /* a concurrent link got there first */
+          throw err;
+        }
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 750));
+      }
     }
+    throw new Error(`KAST SFX overlay could not nest into '${lastScene}': ${lastErr.message}`);
   }
 
   async play(id) {

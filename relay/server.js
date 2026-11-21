@@ -21,16 +21,22 @@ const path = require('path');
 const dgram = require('dgram');
 const { WebSocketServer } = require('ws');
 
-/* Config: relay/.env (gitignored) overrides the process environment. */
-const env_path = path.join(__dirname, '.env');
-if (fs.existsSync(env_path)) {
-  for (const line of fs.readFileSync(env_path, 'utf8').split(/\r?\n/)) {
+/* Config: relay/.env.app (build-injected app credentials, gitignored) is
+   the fallback; relay/.env (gitignored, per-user) wins over it; nothing
+   already in the process environment is touched. Without either file
+   the Kick features start unconfigured and say so loudly at startup. */
+function loadEnvFile(name) {
+  const envPath = path.join(__dirname, name);
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.+?)\s*$/);
     if (m && !process.env[m[1]]) {
       process.env[m[1]] = m[2];
     }
   }
 }
+loadEnvFile('.env');
+loadEnvFile('.env.app');
 
 const PORT = Number(process.env.KAST_RELAY_PORT || 8765);
 const SIMULATE = process.argv.includes('--simulate-chat');
@@ -536,14 +542,26 @@ async function pushScenesCatalog(target) {
   }
 }
 
+/* The overlay scenes follow the user to the newly active scene, one at a
+   time — three concurrent relinks against the same scene gave OBS a
+   creation failure during setup churn. Bursts of scene-change events
+   coalesce into a single pass. */
+let overlayRelink = null;
+function relinkOverlays() {
+  if (overlayRelink) return overlayRelink;
+  overlayRelink = (async () => {
+    try { await obsSfx.linkActiveScene(); } catch (err) { console.log(`[obs] sfx relink failed: ${err.message}`); }
+    try { await obsGfx.linkActiveScene(); } catch (err) { console.log(`[obs] gfx relink failed: ${err.message}`); }
+    if (obsPanic.active) {
+      try { await obsPanic.linkActiveScene(); } catch (err) { console.log(`[obs] panic relink failed: ${err.message}`); }
+    }
+  })().finally(() => { overlayRelink = null; });
+  return overlayRelink;
+}
+
 obsClient.on('event', ({ eventType }) => {
   if (eventType !== 'CurrentProgramSceneChanged') return;
-  /* The overlay scenes must follow the user to the newly active scene. */
-  obsSfx.linkActiveScene().catch((err) => console.log(`[obs] sfx relink failed: ${err.message}`));
-  obsGfx.linkActiveScene().catch((err) => console.log(`[obs] gfx relink failed: ${err.message}`));
-  if (obsPanic.active) {
-    obsPanic.linkActiveScene().catch((err) => console.log(`[obs] panic relink failed: ${err.message}`));
-  }
+  relinkOverlays();
   pushScenesCatalog();
 });
 
@@ -686,6 +704,7 @@ beacon.bind(() => {
 
 const wss = new WebSocketServer({ port: PORT });
 const clients = new Set();
+const devices = new Map();   /* remote address -> box socket that said dev.hello */
 
 function broadcast(obj) {
   const line = JSON.stringify(obj);
@@ -745,10 +764,26 @@ wss.on('connection', (ws, req) => {
       case 'ping':
         ws.send(JSON.stringify({ type: 'pong', t: Date.now() }));
         break;
-      case 'dev.hello':
-        /* Device boot telemetry: the previous reset reason survives in NVS. */
+      case 'dev.hello': {
+        /* Device boot telemetry: the previous reset reason survives in NVS.
+           A box that reconnects without tearing down its old socket would
+           otherwise sit on two live connections and get every frame twice.
+           The newest socket wins; CLI tools never send dev.hello, so they
+           are never mistaken for the box. */
+        const addr = req.socket.remoteAddress;
+        const prev = devices.get(addr);
+        if (prev && prev !== ws) {
+          devices.delete(addr);
+          clients.delete(prev);
+          if (prev.readyState === prev.OPEN) {
+            console.log(`[relay] duplicate device socket from ${addr} — closing the stale one`);
+            prev.close(4000, 'superseded by a new connection');
+          }
+        }
+        devices.set(addr, ws);
         console.log(`[relay] device boot: reset=${msg.reset}`);
         break;
+      }
       case 'chat.send':
         if (kickReady()) {
           kickSendChat(msg.text).then((mid) => {
@@ -756,6 +791,8 @@ wss.on('connection', (ws, req) => {
           }).catch((err) => {
             console.log(`[relay] kick chat.send failed: ${err.message}`);
           });
+        } else if (!KICK_CLIENT_ID && process.env.KAST_KICK_ENABLED !== '0') {
+          console.log(`[relay] chat.send dropped (Kick not configured — see the startup message): ${msg.text}`);
         } else {
           console.log(`[relay] chat.send (Kick not authorized — open the auth URL): ${msg.text}`);
         }
@@ -859,6 +896,9 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     clients.delete(ws);
+    if (devices.get(req.socket.remoteAddress) === ws) {
+      devices.delete(req.socket.remoteAddress);
+    }
     console.log(`[relay] device disconnected, ${clients.size} client(s)`);
   });
   ws.on('error', (err) => console.log(`[relay] socket error: ${err.message}`));
@@ -892,11 +932,21 @@ if (SIMULATE) {
 
 console.log(`[relay] KAST relay listening on ws://0.0.0.0:${PORT}`);
 if (process.env.KAST_OBS_ENABLED !== '0') obsClient.start();
-if (KICK_CLIENT_ID && !kickReady()) {
+if (process.env.KAST_KICK_ENABLED === '0') {
+  /* bench mode — Kick deliberately off */
+} else if (!KICK_CLIENT_ID) {
+  /* Shipped builds carry relay\.env.app (build-injected, gitignored), so
+     reaching this means the install is genuinely without Kick identity.
+     Staying silent here once shipped a build where chat.send failed
+     invisibly and no auth URL ever appeared. */
+  console.log('[relay] *** KICK NOT CONFIGURED — chat send/read and moderation are OFF ***');
+  console.log('[relay] *** this install has no Kick app credentials (relay\\.env.app missing) ***');
+  console.log('[relay] *** owner: rebuild the installer with env.app staged from installer\\.cache ***');
+} else if (!kickReady()) {
   console.log(`[relay] Kick: authorize once by opening this URL in a browser:`);
   console.log(`[relay]   ${kickAuthUrl()}`);
   console.log('[relay] (approving it saves tokens; relay restarts stay authorized)');
-} else if (kickReady()) {
+} else {
   console.log('[relay] Kick authorized — chat send + moderation are live');
   kickChatStart();
 }

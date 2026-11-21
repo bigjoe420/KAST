@@ -50,7 +50,8 @@ playback — so the box stays a fast, quiet remote control for the stream.
 ## Requirements
 
 - Windows 10/11 PC on the same network as the box (runs the Companion)
-- OBS Studio 28+ — during first-time setup you'll enable its WebSocket server:
+- OBS Studio 28+ — free from [obsproject.com](https://obsproject.com); during
+  first-time setup you'll enable its WebSocket server:
   OBS → Tools → WebSocket Server Settings → Enable → **Generate Password** →
   Apply, then *Show Connect Info* gives you the password to paste into KAST
 - A Kick account you can sign into (streamer or moderator)
@@ -92,6 +93,11 @@ finishes, the first-run wizard takes the box from sealed-flash to live chat.
 > **The box and this PC must be on the same Wi-Fi network.** The box finds
 > the PC by itself (UDP broadcast — no IP typing), and broadcast only works
 > within one network. Guest or isolated networks will not do.
+>
+> If the box can't find the PC (some networks block the broadcast), the
+> relay address comes from the PC: right-click the KAST Companion tray icon
+> → **Copy device target (IP:port)**, then type those two values into the
+> box's SETTINGS → Relay host / Relay port.
 
 ### Option B — build from source (ESP-IDF v6.1)
 

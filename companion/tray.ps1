@@ -33,7 +33,6 @@ $benchFlag    = Join-Path $companionDir 'bench-mode.txt'
 $iconPath     = Join-Path $companionDir 'kast.ico'
 
 $candidates = @(
-    'C:\Development\node24\current\node.exe',
     (Join-Path $relayDir '..\node24\current\node.exe'),
     'node.exe'
 )
@@ -77,14 +76,18 @@ function Start-Relay {
 function Update-RelayEnv {
     param([hashtable]$Values)
     $envFile = Join-Path $relayDir '.env'
-    $lines = if (Test-Path $envFile) { @(Get-Content $envFile) } else { @() }
+    # ArrayList, not @(): assigning an if-expression unwraps arrays (empty
+    # file -> $null, one-line file -> scalar string) and += then
+    # string-concatenates the keys into one garbage line.
+    $lines = New-Object System.Collections.ArrayList
+    if (Test-Path $envFile) { foreach ($l in @(Get-Content $envFile)) { [void]$lines.Add($l) } }
     foreach ($key in $Values.Keys) {
         $replacement = "$key=$($Values[$key])"
         $found = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             if ($lines[$i] -match "^\s*$key\s*=") { $lines[$i] = $replacement; $found = $true }
         }
-        if (-not $found) { $lines += $replacement }
+        if (-not $found) { [void]$lines.Add($replacement) }
     }
     Set-Content -Path $envFile -Value $lines -Encoding UTF8
 }
@@ -238,15 +241,15 @@ $miLogs.Add_Click({ Start-Process explorer.exe $relayDir.Path })
 $miObsSetup.Add_Click({ Show-ObsSetup })
 $miSoundLibrary.Add_Click({
     $scriptPath = Join-Path $companionDir 'sound_library.ps1'
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$scriptPath`""
 })
 $miGfxLibrary.Add_Click({
     $scriptPath = Join-Path $companionDir 'graphics_library.ps1'
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$scriptPath`""
 })
 $miSceneTiles.Add_Click({
     $scriptPath = Join-Path $companionDir 'scene_tiles.ps1'
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -STA -File `"$scriptPath`""
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$scriptPath`""
 })
 $miObsTest.Add_Click({
     try { & $balloon 'KAST OBS' (Invoke-ObsCommand 'test') 'Info' }

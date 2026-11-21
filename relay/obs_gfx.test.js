@@ -211,3 +211,52 @@ test('source names are bounded and prefixed', () => {
   assert.equal(sourceName('gg pop'), 'KAST GFX - gg pop');
   assert(sourceName('x'.repeat(100)).length <= 64);
 });
+
+test('relink retries through a transient CreateSceneItem failure', async () => {
+  const client = new FakeObs();
+  let failures = 1;
+  const original = client.request.bind(client);
+  client.request = async (type, data) => {
+    if (type === 'CreateSceneItem' && failures > 0) {
+      failures -= 1;
+      const err = new Error('creation failed'); err.code = 700; throw err;
+    }
+    return original(type, data);
+  };
+  const gfx = makeGfx(client);
+  client.current = 'Other';
+  await gfx.linkActiveScene();
+  assert(client.links.has('Other/KAST GFX'));
+});
+
+test('relink treats a concurrent link (601) as success', async () => {
+  const client = new FakeObs();
+  const original = client.request.bind(client);
+  client.request = async (type, data) => {
+    if (type === 'CreateSceneItem') {
+      const err = new Error('already exists'); err.code = 601; throw err;
+    }
+    return original(type, data);
+  };
+  const gfx = makeGfx(client);
+  client.current = 'Other';
+  await gfx.linkActiveScene();   /* must not throw */
+});
+
+test('relink gives up after three attempts and names the scene', async () => {
+  const client = new FakeObs();
+  let creates = 0;
+  const original = client.request.bind(client);
+  client.request = async (type, data) => {
+    if (type === 'CreateSceneItem') {
+      creates += 1;
+      const err = new Error('creation failed'); err.code = 700; throw err;
+    }
+    return original(type, data);
+  };
+  const gfx = makeGfx(client);
+  client.current = 'Other';
+  await assert.rejects(gfx.linkActiveScene(), /could not nest into 'Other'/);
+  assert.equal(creates, 3);
+  assert(!client.links.has('Other/KAST GFX'));
+});

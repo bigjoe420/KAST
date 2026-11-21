@@ -8,6 +8,8 @@
 KIMI.md
 ROADMAP.md
 PROGRESS.md
+HANDOFF-*.md
+handoff-journals/
 
 # --- Secrets & environment ---
 .env

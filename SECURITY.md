@@ -26,5 +26,9 @@ Firmware-relevant areas we care most about:
 
 KAST connects only to services you point it at (the local relay server and
 OBS on your own network). Kick credentials live in the relay's environment,
-never on the device. Vulnerabilities in third-party components (ESP-IDF, LVGL)
+never on the device. Shipped installs carry them as `relay\.env.app`,
+injected at installer-build time from a gitignored cache file (CI: build
+secret); the per-user `relay\.env` overrides it. Neither file is committed —
+report it as a vulnerability if you ever find one in the repo or a
+release artifact. Vulnerabilities in third-party components (ESP-IDF, LVGL)
 should be reported upstream, but tell us too so we can bump the dependency.

@@ -149,8 +149,8 @@ void kast_scenes_load(lv_obj_t *parent)
     s_hint = lv_label_create(parent);
     lv_label_set_text(s_hint,
                       "No scene tiles yet.\n"
-                      "Pick your OBS scenes in the Companion\n"
-                      "app's Scene Tiles window.");
+                      "On this PC: right-click the KAST icon\n"
+                      "near the clock, then Scene Tiles.");
     lv_obj_set_style_text_font(s_hint, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_hint, KAST_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_align(s_hint, LV_TEXT_ALIGN_CENTER, 0);

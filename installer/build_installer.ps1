@@ -97,6 +97,20 @@ foreach ($f in $relayFiles) {
 Copy-Item (Join-Path $root 'relay\starter_sounds\*.mp3') (Join-Path $payload 'relay\starter_sounds')
 $starterCount = (Get-ChildItem (Join-Path $payload 'relay\starter_sounds') -Filter *.mp3).Count
 if ($starterCount -ne 12) { throw "expected 12 starter sounds, found $starterCount" }
+
+# Kick app credentials (build secret): shipped as relay\.env.app, which the
+# relay falls back to when the user's own .env has none. Never committed —
+# the source of truth lives in the gitignored tool cache. A build without
+# it still compiles; the relay then starts with a loud "KICK NOT
+# CONFIGURED" message instead of failing silently. CI injects the same
+# file into .cache as a build secret.
+$envAppSrc = Join-Path $cache 'env.app'
+if (Test-Path $envAppSrc) {
+    Copy-Item $envAppSrc (Join-Path $payload 'relay\.env.app')
+    Write-Host 'Staged relay\.env.app (Kick app credentials)'
+} else {
+    Write-Warning 'installer\.cache\env.app missing — building WITHOUT Kick app credentials. Chat send/read and moderation will be off until relay\.env.app is added to an install.'
+}
 # ws is the only dependency and has no sub-dependencies.
 Copy-Item (Join-Path $root 'relay\node_modules\ws') (Join-Path $payload 'relay\node_modules\ws') -Recurse
 
